@@ -6,3 +6,11 @@ edition = "2021"
 
 [dependencies]
 zmq = "0.10.0"
+
+[dependencies.uuid]
+version = "1.10.0"
+features = [
+    "v7",                # Lets you generate random UUIDs
+    #"fast-rng",          # Use a faster (but still sufficiently random) RNG
+    #"macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
+]
