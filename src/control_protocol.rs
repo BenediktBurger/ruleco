@@ -1,3 +1,5 @@
+use std::io;
+
 use crate::{
     core::{create_conversation_id, ContentTypes, FullName},
     VERSION,
@@ -23,9 +25,12 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn new(frames: Vec<Vec<u8>>) -> Result<Self, &'static str> {
+    pub fn new(frames: Vec<Vec<u8>>) -> Result<Self, io::Error> {
         if frames.len() < 4 {
-            return Err("not enough frames!");
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Not enough frames.",
+            ));
         }
         Ok(Self { frames })
     }
@@ -60,8 +65,14 @@ impl Message {
     pub fn version(&self) -> Option<&u8> {
         self.frames[0].get(0)
     }
+    pub fn receiver_frame(&self) -> &Vec<u8> {
+        &self.frames[1]
+    }
     pub fn receiver(&self) -> FullName {
         FullName::from_vec(&self.frames[1]).unwrap()
+    }
+    pub fn sender_frame(&self) -> &Vec<u8> {
+        &self.frames[2]
     }
     pub fn sender(&self) -> FullName {
         FullName::from_vec(&self.frames[2]).unwrap()
@@ -77,6 +88,39 @@ impl Message {
     }
     pub fn to_frames(&self) -> &Vec<Vec<u8>> {
         &self.frames
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Error {
+    // JSONRPC 2.0 defined errors
+    InvalidRequest,
+    MethodNotFound,
+    InvalidParams,
+    InternalError,
+    ParseError,
+    ServerError,
+    // LECO errors
+    NotSignedIn,
+    DuplicateName,
+    NodeUnknown,
+    ReceiverUnknown,
+}
+
+impl Error {
+    pub fn code(&self) -> i16 {
+        match &self {
+            Error::InvalidRequest => -32600,
+            Error::MethodNotFound => -32601,
+            Error::InvalidParams => -32602,
+            Error::InternalError => -32603,
+            Error::ParseError => -32700,
+            Error::ServerError => -32000,
+            Error::NotSignedIn => -32090,
+            Error::DuplicateName => -32091,
+            Error::NodeUnknown => -32092,
+            Error::ReceiverUnknown => -32093,
+        }
     }
 }
 
@@ -105,7 +149,13 @@ mod tests {
     #[test]
     fn test_receiver() {
         let msg = create_message();
-        assert_eq!(msg.receiver(), FullName {namespace: b"N1", name: b"receiver"})
+        assert_eq!(
+            msg.receiver(),
+            FullName {
+                namespace: b"N1",
+                name: b"receiver"
+            }
+        )
     }
     #[test]
     fn test_content() {
