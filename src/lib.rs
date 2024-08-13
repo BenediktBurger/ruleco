@@ -112,3 +112,5 @@ pub mod core {
 pub mod control_protocol;
 
 pub mod data_protocol;
+
+pub mod json;

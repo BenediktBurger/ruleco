@@ -7,7 +7,7 @@ pub struct DataMessage {
 }
 
 impl DataMessage {
-    fn new(topic: &str, m_type: u8, content: ContentTypes) -> Self {
+    pub fn new(topic: &str, m_type: u8, content: ContentTypes) -> Self {
         let mut header = [0u8; 17];
         let (one, _two) = header.split_at_mut(16);
         one.copy_from_slice(&create_conversation_id());
@@ -24,11 +24,11 @@ impl DataMessage {
         }
     }
 
-    fn conversation_id(&self) -> &[u8] {
+    pub fn conversation_id(&self) -> &[u8] {
         &self.header[0..16]
     }
 
-    fn message_type(&self) -> u8 {
+    pub fn message_type(&self) -> u8 {
         self.header[16]
     }
 
