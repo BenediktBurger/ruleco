@@ -2,14 +2,14 @@
 //!
 //! Route messages between different Components in a LECO network
 
-use std::{collections::HashMap, io, time::Instant};
+use std::{collections::HashMap, io, time::{Duration, Instant}};
 
 use json::{is_sign_in, ErrorResponse, Request, Response};
 use ruleco::{
     self,
     control_protocol::{Error, Message},
     core::FullName,
-    json,
+    json::{self, to_vec},
 };
 use serde::Serialize;
 use zmq;
@@ -75,6 +75,8 @@ impl Coordinator {
         while self.running {
             let _ = self.loop_element();
         }
+        // TODO move somehow in loop
+        self.check_timeouts();
     }
 
     fn loop_element(&mut self) -> () {
@@ -137,6 +139,28 @@ impl Coordinator {
                 }
             }
         }
+    }
+
+    fn send_local_ping(&self, identity: &Vec<u8>, name: &Vec<u8>){
+        let rq = Request::build(0, "pong");
+        let message = Message::build(
+            name.to_vec(), self.full_name.clone(),
+            None, None, 1,
+            ruleco::core::ContentTypes::Frame(to_vec(&rq)));
+        let msg_cont = MessageContainer {
+            identity,
+            message,
+        };
+        self.send_local_message(msg_cont);
+    }
+
+    fn check_timeouts(&mut self) {
+        for (k , v) in self.components.iter() {
+            if v.timestamp.elapsed() >= Duration::from_secs(10) {
+                self.send_local_ping(&v.identity, k);
+            }
+        }
+        self.components.retain(|_, comp: &mut Component| comp.timestamp.elapsed() <= Duration::from_secs(30));
     }
 
     fn send_error(&self, receiver: Vec<u8>, error: Error, conversation_id: Option<&[u8]>) {
