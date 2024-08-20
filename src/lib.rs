@@ -1,6 +1,6 @@
 //! # RuLECO
 //!
-//! `ruleco` is a Rust implementation of the Laboratory Control Protocol (LECO)
+//! `ruleco` is a Rust implementation of the [Laboratory Experiment COntrol (LECO) protocol](https://github.com/pymeasure/leco-protocol)
 
 const VERSION: u8 = 0; // LECO protocol version
 
