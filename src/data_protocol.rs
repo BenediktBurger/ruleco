@@ -1,5 +1,6 @@
 use super::core::{create_conversation_id, ContentTypes};
 /// A message in the data protocol
+#[derive(Clone)]
 pub struct DataMessage {
     pub topic: Vec<u8>,
     pub header: [u8; 16 + 1],

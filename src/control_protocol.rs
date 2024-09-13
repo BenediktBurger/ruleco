@@ -20,6 +20,7 @@ impl<'b> Header<'b> {
     }
 }
 
+#[derive(Clone)]
 pub struct Message {
     frames: Vec<Vec<u8>>,
 }
