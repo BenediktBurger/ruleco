@@ -1,4 +1,4 @@
-use crate::full_name::FullName;
+use crate::full_name::{FullName, FullNameError};
 use crate::protocol_constants::VERSION;
 use std::io;
 use uuid::Uuid;
@@ -82,14 +82,14 @@ impl Message {
     pub fn receiver_frame(&self) -> &Vec<u8> {
         &self.frames[1]
     }
-    pub fn receiver(&self) -> FullName {
-        FullName::from_vec(&self.frames[1]).unwrap()
+    pub fn receiver(&self) -> Result<FullName, FullNameError> {
+        FullName::from_slice(&self.frames[1])
     }
     pub fn sender_frame(&self) -> &Vec<u8> {
         &self.frames[2]
     }
-    pub fn sender(&self) -> FullName {
-        FullName::from_vec(&self.frames[2]).unwrap()
+    pub fn sender(&self) -> Result<FullName, FullNameError> {
+        FullName::from_slice(&self.frames[2])
     }
     pub fn header(&self) -> Header {
         Header::from_frame(&self.frames[3])
@@ -108,7 +108,6 @@ impl Message {
 #[cfg(test)]
 mod tests {
     use super::{ContentTypes, Message};
-    use crate::full_name::FullName;
     use crate::protocol_constants::VERSION;
 
     fn create_message() -> Message {
@@ -130,13 +129,9 @@ mod tests {
     #[test]
     fn test_receiver() {
         let msg = create_message();
-        assert_eq!(
-            msg.receiver(),
-            FullName {
-                namespace: b"N1",
-                name: b"receiver"
-            }
-        )
+        let receiver = msg.receiver().unwrap();
+        assert_eq!(receiver.namespace(), b"N1");
+        assert_eq!(receiver.name(), b"receiver");
     }
     #[test]
     fn test_header() {

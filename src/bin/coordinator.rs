@@ -123,9 +123,16 @@ impl Coordinator {
     ) -> Option<SendingContainer<Vec<u8>>> {
         let identity = msg_cont.identity;
         let mut message = msg_cont.message;
-        let sender_name = message.sender();
-        let mut receiver_name = message.receiver();
-        println!("message read from {:?}", sender_name.name);
+        let sender_name = message.sender().unwrap();
+        let mut receiver_name = match message.receiver() {
+            Ok(name) => name,
+            Err(_) => {
+                // Handle the error appropriately, maybe send an error message back
+                // For now, we'll just return None to drop the message
+                return None;
+            }
+        };
+        println!("message read from {:?}", sender_name.name());
         let valid = self.check_message(&identity, &message, &sender_name, &receiver_name);
         match valid {
             Err(error) => {
@@ -140,13 +147,19 @@ impl Coordinator {
                 });
             }
             Ok(()) => {
-                if receiver_name.name == b"COORDINATOR"
-                    && (receiver_name.namespace == self.namespace
-                        || receiver_name.namespace.len() == 0)
+                if receiver_name.name() == b"COORDINATOR"
+                    && (receiver_name.namespace() == self.namespace
+                        || receiver_name.namespace().len() == 0)
                 {
                     message = self.handle_message_content(&message, &sender_name);
                     // find somehow the routing stuff
-                    receiver_name = message.receiver();
+                    receiver_name = match message.receiver() {
+                        Ok(name) => name,
+                        Err(_) => {
+                            // Handle the error appropriately
+                            return None;
+                        }
+                    };
                 }
                 match self.find_routing_information(&receiver_name) {
                     Err(error) => {
@@ -155,7 +168,13 @@ impl Coordinator {
                             error,
                             Some(message.header().conversation_id),
                         );
-                        match self.find_routing_information(&message.receiver()) {
+                        match self.find_routing_information(&match message.receiver() {
+                            Ok(name) => name,
+                            Err(_) => {
+                                // Handle the error appropriately
+                                return None;
+                            }
+                        }) {
                             Err(_err) => {
                                 println!("Could not send 'receiver not found' to original sender.");
                                 None
@@ -180,8 +199,8 @@ impl Coordinator {
         &self,
         receiver_name: &FullName,
     ) -> Result<(Vec<u8>, Vec<u8>), Error> {
-        if receiver_name.namespace == self.namespace || receiver_name.namespace.len() == 0 {
-            match self.components.get(receiver_name.name) {
+        if receiver_name.namespace() == self.namespace || receiver_name.namespace().len() == 0 {
+            match self.components.get(receiver_name.name()) {
                 Some(comp) => Ok((Vec::new(), comp.identity.clone())),
                 None => Err(Error::ReceiverUnknown),
             }
@@ -206,7 +225,7 @@ impl Coordinator {
         sender_name: &FullName,
         receiver_name: &FullName,
     ) -> Result<(), Error> {
-        let sender = sender_name.name;
+        let sender = sender_name.name();
         let component = self.components.get_mut(sender);
         match component {
             Some(component) => {
@@ -218,7 +237,7 @@ impl Coordinator {
                 }
             }
             None => {
-                if receiver_name.name == b"COORDINATOR"
+                if receiver_name.name() == b"COORDINATOR"
                     && is_sign_in(&message.content_frame().unwrap()[..])
                 {
                     self.sign_in(identity, sender_name)
@@ -328,12 +347,12 @@ impl Coordinator {
 
     fn sign_in<E>(&mut self, identity: &Vec<u8>, sender_name: &FullName) -> Result<(), E> {
         self.components
-            .insert(sender_name.name.to_vec(), Component::build(identity));
+            .insert(sender_name.name().to_vec(), Component::build(identity));
         Ok(())
     }
 
     fn sign_out<E>(&mut self, sender_name: &FullName) -> Result<Option<u8>, E> {
-        self.components.remove(&sender_name.name.to_vec());
+        self.components.remove(&sender_name.name().to_vec());
         Ok(None)
     }
 
@@ -478,14 +497,8 @@ mod test {
         let mut c = make_coordinator();
         let identity = b"id_A".to_vec();
         let message = make_message();
-        let sender_name = FullName {
-            namespace: b"",
-            name: b"com_A",
-        };
-        let receiver_name = FullName {
-            namespace: b"",
-            name: b"com_B",
-        };
+        let sender_name = FullName::from_slice(b"com_A").unwrap();
+        let receiver_name = FullName::from_slice(b"com_B").unwrap();
         let result = c.check_message(&identity, &message, &sender_name, &receiver_name);
         result
     }
@@ -494,14 +507,8 @@ mod test {
         let mut c = make_coordinator();
         let identity = b"id_A".to_vec();
         let message = make_message();
-        let sender_name = FullName {
-            namespace: b"",
-            name: b"com_C",
-        };
-        let receiver_name = FullName {
-            namespace: b"",
-            name: b"com_B",
-        };
+        let sender_name = FullName::from_slice(b"com_C").unwrap();
+        let receiver_name = FullName::from_slice(b"com_B").unwrap();
         let result = c.check_message(&identity, &message, &sender_name, &receiver_name);
         assert![result.is_err_and(|err| err == Error::NotSignedIn)]
     }

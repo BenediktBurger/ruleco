@@ -73,12 +73,17 @@ impl Communicator {
         self.send_rpc_message("COORDINATOR".to_string(), "sign_in");
         let response = self.read_message();
         match serde_json::from_slice::<Response>(response.content_frame().unwrap_or(&vec![])) {
-            Ok(_response) => self.finish_sign_in(response.sender()),
+            Ok(_response) => {
+                match response.sender() {
+                    Ok(sender) => self.finish_sign_in(sender),
+                    Err(_err) => (), // Handle FullNameError if needed
+                }
+            }
             Err(_err) => (),
         }
     }
     fn finish_sign_in(&mut self, coordinator_name: FullName) {
-        let mut full_name: Vec<u8> = coordinator_name.namespace.to_vec();
+        let mut full_name: Vec<u8> = coordinator_name.namespace().to_vec();
         full_name.push(46);
         full_name.extend(&self.name);
         self.full_name = full_name
