@@ -7,4 +7,4 @@ The LECO protocol branch [pyleco-state](https://github.com/pymeasure/leco-protoc
 See this [documentation](https://leco-laboratory-experiment-control-protocol--69.org.readthedocs.build/en/69/) for the LECO definitions including these assumptions.
 These things might change, if LECO defines them differently.
 
-You are welcome to contribute, especially commenting on code improvements, as this is my first contact with rust.
+You are welcome to contribute, especially commenting on code improvements, as this is my first contact with Rust.

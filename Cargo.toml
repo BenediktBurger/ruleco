@@ -1,3 +1,9 @@
+[workspace]
+members = [
+    ".",
+    "ruleco-core",
+]
+
 [package]
 name = "ruleco"
 version = "0.1.0"
@@ -5,14 +11,7 @@ authors = ["BB"]
 edition = "2021"
 
 [dependencies]
+ruleco-core = { path = "ruleco-core", version = "0.1.0" }
 zmq = "0.10.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-
-[dependencies.uuid]
-version = "1.10.0"
-features = [
-    "v7",                # Lets you generate random UUIDs
-    #"fast-rng",          # Use a faster (but still sufficiently random) RNG
-    #"macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
-]
