@@ -1,7 +1,7 @@
 use std::fmt;
 
 /// Error type for `FullName` parsing.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum FullNameError {
     /// The input contained an invalid number of parts (more than one '.').
     InvalidFormat,

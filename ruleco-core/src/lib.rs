@@ -5,5 +5,6 @@
 
 pub mod errors;
 pub mod full_name;
+pub mod jsonrpc_utils;
 pub mod message;
 pub mod protocol_constants;

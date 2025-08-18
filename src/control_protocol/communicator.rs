@@ -3,8 +3,9 @@
 //!
 use crate::{
     core::FullName,
-    json::{to_vec, Request, Response},
+    json::{Request, Response},
 };
+use ruleco_core::message::{ConversationId, MessageBuilder};
 use serde_json::Error;
 use zmq;
 
@@ -34,7 +35,7 @@ impl Communicator {
     }
 
     pub fn send_message(&self, message: Message) {
-        let _ = self.socket.send_multipart(message.frames, 0);
+        let _ = self.socket.send_multipart(message.to_frames(), 0);
     }
 
     /// Poll whether a new message arrived
@@ -43,20 +44,20 @@ impl Communicator {
     }
     pub fn read_message(&self) -> Message {
         let frames = self.socket.recv_multipart(0).unwrap();
-        Message::new(frames).unwrap()
+        Message::from_frames(frames).unwrap()
     }
 
-    pub fn send_rpc_message<T: ToString>(&self, receiver: String, method: T) -> Vec<u8> {
+    pub fn send_rpc_message<T: ToString>(&self, receiver: String, method: T) -> ConversationId {
         let request_content = Request::build(0, method);
-        let request = Message::build(
-            receiver.into_bytes(),
-            self.name.to_vec(),
-            None,
-            None,
-            1,
-            crate::core::ContentTypes::Frame(to_vec(&request_content)),
-        );
-        let cid = request.header().conversation_id.to_vec();
+        let builder = MessageBuilder::new();
+        let request = builder
+            .receiver(FullName::from_str(&receiver).unwrap())
+            .sender(FullName::from_slice(&self.name).unwrap())
+            .payload_json(&request_content)
+            .unwrap()
+            .build()
+            .unwrap();
+        let cid = request.header().conversation_id.clone();
         self.send_message(request);
         cid
     }
@@ -74,10 +75,8 @@ impl Communicator {
         let response = self.read_message();
         match serde_json::from_slice::<Response>(response.content_frame().unwrap_or(&vec![])) {
             Ok(_response) => {
-                match response.sender() {
-                    Ok(sender) => self.finish_sign_in(sender),
-                    Err(_err) => (), // Handle FullNameError if needed
-                }
+                let sender = response.sender();
+                self.finish_sign_in(sender.clone());
             }
             Err(_err) => (),
         }
