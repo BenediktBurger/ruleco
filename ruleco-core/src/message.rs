@@ -1,5 +1,5 @@
 use crate::full_name::{FullName, FullNameError};
-use crate::protocol_constants::VERSION;
+use crate::protocol_constants::{MessageType, VERSION};
 use std::io;
 use uuid::Uuid;
 
@@ -26,6 +26,17 @@ impl<'b> Header<'b> {
             message_id: &frame[16..16 + 3],
             message_type: &frame[19],
         }
+    }
+
+    /// Gets the raw message type value.
+    pub fn message_type_raw(&self) -> u8 {
+        *self.message_type
+    }
+
+    /// Gets the message type, interpreting it according to the standard `MessageType` enum.
+    /// Unknown types (e.g., custom user types >127) will be mapped to `MessageType::Undefined`.
+    pub fn message_type_enum(&self) -> MessageType {
+        self.message_type_raw().into()
     }
 }
 
@@ -108,7 +119,7 @@ impl Message {
 #[cfg(test)]
 mod tests {
     use super::{ContentTypes, Message};
-    use crate::protocol_constants::VERSION;
+    use crate::protocol_constants::{VERSION, MessageType};
 
     fn create_message() -> Message {
         Message::build(
@@ -116,7 +127,7 @@ mod tests {
             b"N1.sender".to_vec(),
             None,
             None,
-            1,
+            MessageType::Json.into(),
             ContentTypes::Frame(b"content".to_vec()),
         )
     }
@@ -141,6 +152,27 @@ mod tests {
         assert_eq!(header.message_id, &[0u8; 3]);
         assert_eq!(header.message_type, &1);
     }
+
+    #[test]
+    fn test_header_message_type_enum() {
+        let msg = create_message();
+        let header = msg.header();
+        assert_eq!(header.message_type_enum(), MessageType::Json);
+
+        // Test with a custom type
+        let custom_msg = Message::build(
+            b"N1.receiver".to_vec(),
+            b"N1.sender".to_vec(),
+            None,
+            None,
+            150, // Custom type
+            ContentTypes::Frame(b"content".to_vec()),
+        );
+        let custom_header = custom_msg.header();
+        assert_eq!(custom_header.message_type_enum(), MessageType::Undefined);
+        assert_eq!(custom_header.message_type_raw(), 150);
+    }
+
     #[test]
     fn test_content() {
         let msg = create_message();
