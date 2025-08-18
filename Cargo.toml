@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "ruleco-core",
+    "ruleco-coordinator",
     "ruleco-legacy",
 ]
 resolver = "3"
