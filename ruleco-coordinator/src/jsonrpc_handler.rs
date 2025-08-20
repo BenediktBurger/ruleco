@@ -62,11 +62,29 @@ impl<'a> JsonRpcHandler<'a> {
             "sign_out" => self
                 .handle_sign_out(identity, message, request.id())
                 .map(JsonRpcOutcome::Response),
+            "coordinator_sign_in" => self
+                .handle_coordinator_sign_in(identity, message, request.id())
+                .map(JsonRpcOutcome::Response),
+            "coordinator_sign_out" => self
+                .handle_coordinator_sign_out(identity, message, request.id())
+                .map(JsonRpcOutcome::Response),
+            "add_nodes" => self
+                .handle_add_nodes(identity, message, request.id())
+                .map(JsonRpcOutcome::Response),
+            "send_nodes" => self
+                .handle_send_nodes(identity, message, request.id())
+                .map(JsonRpcOutcome::Response),
+            "record_components" => self
+                .handle_record_components(identity, message, request.id())
+                .map(JsonRpcOutcome::Response),
+            "send_local_components" => self
+                .handle_send_local_components(identity, message, request.id())
+                .map(JsonRpcOutcome::Response),
+            "send_global_components" => self
+                .handle_send_global_components(identity, message, request.id())
+                .map(JsonRpcOutcome::Response),
             _ => {
-                let sender = message
-                    .sender()
-                    .as_ref()
-                    .map_err(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))?;
+                let sender = self.extract_sender(message)?;
                 let error_message = self.create_error_response(
                     identity,
                     sender,
@@ -76,6 +94,28 @@ impl<'a> JsonRpcHandler<'a> {
                 Ok(JsonRpcOutcome::Response(error_message))
             }
         }
+    }
+
+    /// Extract sender from message with standard error handling
+    fn extract_sender<'b>(&self, message: &'b MessageView) -> Result<&'b FullName, Error> {
+        message.try_sender(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))
+    }
+
+    /// Create a standard null JSON-RPC response
+    fn create_null_response(
+        &self,
+        identity: &[u8],
+        message: &MessageView,
+        id: Id,
+    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+        let sender = self.extract_sender(message)?;
+        self.create_json_response(
+            identity,
+            sender,
+            id,
+            serde_json::Value::Null,
+            Some(message.header().conversation_id.clone()),
+        )
     }
 
     /// Create an error response message
@@ -136,18 +176,7 @@ impl<'a> JsonRpcHandler<'a> {
         message: &MessageView,
         id: Id,
     ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        let sender = message
-            .sender()
-            .as_ref()
-            .map_err(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))?;
-        let response_message = self.create_json_response(
-            identity,
-            sender,
-            id,
-            serde_json::Value::Null,
-            Some(message.header().conversation_id.clone()),
-        )?;
-        Ok(response_message)
+        self.create_null_response(identity, message, id)
     }
 
     fn handle_sign_in(
@@ -156,20 +185,10 @@ impl<'a> JsonRpcHandler<'a> {
         message: &MessageView,
         id: Id,
     ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        let sender = message
-            .sender()
-            .as_ref()
-            .map_err(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))?;
+        let sender = self.extract_sender(message)?;
         self.core
             .handle_sign_in(sender.clone(), identity.to_vec())?;
-        let response_message = self.create_json_response(
-            identity,
-            sender,
-            id,
-            serde_json::Value::Null,
-            Some(message.header().conversation_id.clone()),
-        )?;
-        Ok(response_message)
+        self.create_null_response(identity, message, id)
     }
 
     fn handle_sign_out(
@@ -178,19 +197,105 @@ impl<'a> JsonRpcHandler<'a> {
         message: &MessageView,
         id: Id,
     ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        let sender = message
-            .sender()
-            .as_ref()
-            .map_err(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))?;
+        let sender = self.extract_sender(message)?;
         self.core.handle_sign_out(sender.clone())?;
-        let response_message = self.create_json_response(
-            identity,
-            sender,
-            id,
-            serde_json::Value::Null,
-            Some(message.header().conversation_id.clone()),
+        self.create_null_response(identity, message, id)
+    }
+
+    /// Handle coordinator sign-in
+    fn handle_coordinator_sign_in(
+        &mut self,
+        identity: &[u8],
+        message: &MessageView,
+        id: Id,
+    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+        // Extract sender (should be the coordinator signing in)
+        let sender = self.extract_sender(message)?;
+
+        // For coordinator sign-in, we expect the sender to be in format "namespace.COORDINATOR"
+        if sender.name() != b"COORDINATOR" {
+            return self.create_error_response(
+                identity,
+                sender,
+                &Error::JsonRpc(ErrorObject::owned(
+                    -32091, // Using duplicate name error code
+                    "Invalid coordinator sign-in request".to_string(),
+                    None::<()>,
+                )),
+                Some(message.header().conversation_id.clone()),
+            );
+        }
+
+        // Get the namespace from the sender
+        let namespace = sender.namespace();
+
+        // For now, we'll use a placeholder address - in a real implementation,
+        // this would come from the connection information
+        let address = "unknown".to_string();
+
+        // Handle the coordinator sign-in
+        self.core.handle_coordinator_sign_in(
+            namespace,
+            identity.to_vec(), // dealer identity
+            address,
         )?;
-        Ok(response_message)
+
+        // Return success response
+        self.create_null_response(identity, message, id)
+    }
+
+    fn handle_coordinator_sign_out(
+        &mut self,
+        identity: &[u8],
+        message: &MessageView,
+        id: Id,
+    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+        self.create_null_response(identity, message, id)
+    }
+
+    fn handle_add_nodes(
+        &mut self,
+        identity: &[u8],
+        message: &MessageView,
+        id: Id,
+    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+        self.create_null_response(identity, message, id)
+    }
+
+    fn handle_send_nodes(
+        &mut self,
+        identity: &[u8],
+        message: &MessageView,
+        id: Id,
+    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+        self.create_null_response(identity, message, id)
+    }
+
+    fn handle_record_components(
+        &mut self,
+        identity: &[u8],
+        message: &MessageView,
+        id: Id,
+    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+        self.create_null_response(identity, message, id)
+    }
+
+    fn handle_send_local_components(
+        &mut self,
+        identity: &[u8],
+        message: &MessageView,
+        id: Id,
+    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+        self.create_null_response(identity, message, id)
+    }
+
+    fn handle_send_global_components(
+        &mut self,
+        identity: &[u8],
+        message: &MessageView,
+        id: Id,
+    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+        self.create_null_response(identity, message, id)
     }
 
     fn handle_shut_down(
@@ -201,17 +306,6 @@ impl<'a> JsonRpcHandler<'a> {
     ) -> Result<MessageView, Box<dyn std::error::Error>> {
         // Note: Shut down logic will be handled by the CoordinatorApp
         // based on the JsonRpcOutcome::Shutdown variant.
-        let sender = message
-            .sender()
-            .as_ref()
-            .map_err(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))?;
-        let response_message = self.create_json_response(
-            identity,
-            sender,
-            id,
-            serde_json::Value::Null,
-            Some(message.header().conversation_id.clone()),
-        )?;
-        Ok(response_message)
+        self.create_null_response(identity, message, id)
     }
 }
