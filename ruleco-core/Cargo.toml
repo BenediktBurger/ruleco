@@ -1,7 +1,6 @@
 [package]
 name = "ruleco-core"
-version = "0.1.0"
-authors = ["BB"]
+workspace = ".."
 edition = "2021"
 
 [dependencies]

@@ -9,10 +9,14 @@ use std::{
 };
 
 use json::{is_sign_in, ErrorResponse, Request, Response};
-use ruleco::{
+use ruleco_core::{
+    full_name::FullName,
+    message::{ConversationId, MessageBuilder},
+    protocol_constants::MessageType,
+};
+use ruleco_legacy::{
     self,
     control_protocol::{Error, Message},
-    core::FullName,
     json::{self, to_vec},
 };
 use serde::Serialize;
@@ -26,7 +30,7 @@ fn main() {
 /// Combine a socket identity and a message
 struct MessageContainer<T: zmq::Sendable> {
     identity: T,
-    message: ruleco::control_protocol::Message,
+    message: ruleco_legacy::control_protocol::Message,
 }
 
 /// Combine sending socket information with a message
@@ -55,7 +59,7 @@ impl Component {
 
 struct Coordinator {
     namespace: Vec<u8>,
-    full_name: Vec<u8>,
+    full_name: FullName,
     router: zmq::Socket,
     components: HashMap<Vec<u8>, Component>,
     running: bool,
@@ -73,10 +77,8 @@ impl Coordinator {
             router.bind(&format!("tcp://*:{port}")).unwrap();
         }
         let components = HashMap::new();
-        let mut full_name = name.into_bytes();
-        let name_len = full_name.len();
-        full_name.extend_from_slice(b".COORDINATOR");
-        let namespace = full_name[..name_len].to_vec();
+        let namespace = name.into_bytes();
+        let full_name = FullName::new(namespace.clone(), b"COORDINATOR".to_vec());
         Self {
             namespace,
             router,
@@ -110,7 +112,7 @@ impl Coordinator {
     fn read_message(&self) -> Result<MessageContainer<Vec<u8>>, io::Error> {
         let identity = self.router.recv_bytes(0)?;
         let frames = self.router.recv_multipart(0)?;
-        let message = Message::new(frames)?;
+        let message = Message::from_frames(frames)?;
         Ok(MessageContainer { identity, message })
     }
 
@@ -123,23 +125,16 @@ impl Coordinator {
     ) -> Option<SendingContainer<Vec<u8>>> {
         let identity = msg_cont.identity;
         let mut message = msg_cont.message;
-        let sender_name = message.sender().unwrap();
-        let mut receiver_name = match message.receiver() {
-            Ok(name) => name,
-            Err(_) => {
-                // Handle the error appropriately, maybe send an error message back
-                // For now, we'll just return None to drop the message
-                return None;
-            }
-        };
+        let sender_name = message.sender();
+        let mut receiver_name = message.receiver();
         println!("message read from {:?}", sender_name.name());
-        let valid = self.check_message(&identity, &message, &sender_name, &receiver_name);
+        let valid = self.check_message(&identity, &message, &sender_name, receiver_name);
         match valid {
             Err(error) => {
                 let message = self.create_error(
-                    message.sender_frame().to_vec(),
+                    message.sender().clone(),
                     error,
-                    Some(message.header().conversation_id),
+                    Some(message.header().conversation_id.clone()),
                 );
                 return Some(SendingContainer {
                     receiving_namespace: Vec::new(),
@@ -153,28 +148,16 @@ impl Coordinator {
                 {
                     message = self.handle_message_content(&message, &sender_name);
                     // find somehow the routing stuff
-                    receiver_name = match message.receiver() {
-                        Ok(name) => name,
-                        Err(_) => {
-                            // Handle the error appropriately
-                            return None;
-                        }
-                    };
+                    receiver_name = message.receiver();
                 }
                 match self.find_routing_information(&receiver_name) {
                     Err(error) => {
                         let message = self.create_error(
-                            message.receiver_frame().to_vec(),
+                            message.receiver().clone(),
                             error,
-                            Some(message.header().conversation_id),
+                            Some(message.header().conversation_id.clone()),
                         );
-                        match self.find_routing_information(&match message.receiver() {
-                            Ok(name) => name,
-                            Err(_) => {
-                                // Handle the error appropriately
-                                return None;
-                            }
-                        }) {
+                        match self.find_routing_information(&receiver_name.clone()) {
                             Err(_err) => {
                                 println!("Could not send 'receiver not found' to original sender.");
                                 None
@@ -250,14 +233,13 @@ impl Coordinator {
 
     fn send_local_ping(&self, identity: &Vec<u8>, name: &Vec<u8>) {
         let rq = Request::build(0, "pong");
-        let message = Message::build(
-            name.to_vec(),
-            self.full_name.clone(),
-            None,
-            None,
-            1,
-            ruleco::core::ContentTypes::Frame(to_vec(&rq)),
-        );
+        let message = MessageBuilder::new()
+            .receiver(FullName::from_slice(name).unwrap())
+            .sender(self.full_name.clone())
+            .message_type(MessageType::Json.into())
+            .payload_single(to_vec(&rq))
+            .build()
+            .unwrap();
         let msg_cont = MessageContainer { identity, message };
         self.send_local_message(msg_cont);
     }
@@ -274,41 +256,41 @@ impl Coordinator {
 
     fn create_error(
         &self,
-        receiver: Vec<u8>,
+        receiver: FullName,
         error: Error,
-        conversation_id: Option<&[u8]>,
+        conversation_id: Option<ConversationId>,
     ) -> Message {
         println!("Send error with number {}", error.code());
         let error_r = ErrorResponse::build(0, error.code(), error.message());
         let error_msg: Vec<u8> = serde_json::to_vec(&error_r).unwrap();
-        let message = Message::build(
-            receiver,
-            self.full_name.clone(),
-            conversation_id,
-            None,
-            1,
-            ruleco::core::ContentTypes::Frame(error_msg),
-        );
+        let message = MessageBuilder::new()
+            .conversation_id(conversation_id.unwrap_or_default())
+            .receiver(receiver)
+            .sender(self.full_name.clone())
+            .message_type(MessageType::Json.into())
+            .payload_single(error_msg)
+            .build()
+            .unwrap();
         message
     }
 
     fn create_response(
         &self,
-        receiver: Vec<u8>,
+        receiver: FullName,
         id: u16,
-        conversation_id: Option<&[u8]>,
+        conversation_id: Option<ConversationId>,
         result: impl Serialize,
     ) -> Message {
         let response = Response::build(id, result);
         let response_msg: Vec<u8> = serde_json::to_vec(&response).unwrap();
-        let message = Message::build(
-            receiver,
-            self.full_name.clone(),
-            conversation_id,
-            None,
-            1,
-            ruleco::core::ContentTypes::Frame(response_msg),
-        );
+        let message = MessageBuilder::new()
+            .conversation_id(conversation_id.unwrap_or_default())
+            .receiver(receiver)
+            .sender(self.full_name.clone())
+            .message_type(MessageType::Json.into())
+            .payload_single(response_msg)
+            .build()
+            .unwrap();
         message
     }
 
@@ -322,8 +304,9 @@ impl Coordinator {
     /// Handle the content of a message which is directed to this Coordinator itself.
     fn handle_message_content(&mut self, message: &Message, sender_name: &FullName) -> Message {
         println!("handle message");
-        let receiver = message.sender_frame().to_vec();
-        let conversation_id: Option<&[u8]> = Some(message.header().conversation_id);
+        let receiver = message.sender().clone();
+        let conversation_id: Option<ConversationId> =
+            Some(message.header().conversation_id.clone());
         let content = match message.content_frame() {
             Some(content) => content,
             None => return self.create_error(receiver, Error::ParseError, conversation_id),
@@ -365,7 +348,7 @@ impl Coordinator {
 
 #[cfg(test)]
 mod test {
-    use ruleco::control_protocol::communicator::Communicator;
+    use ruleco_legacy::control_protocol::communicator::Communicator;
     use serde_json::Value;
 
     use super::*;
@@ -401,14 +384,11 @@ mod test {
     }
 
     fn make_message() -> Message {
-        Message::build(
-            b"receiver".to_vec(),
-            b"sender".to_vec(),
-            None,
-            None,
-            1,
-            ruleco::core::ContentTypes::Null,
-        )
+        MessageBuilder::new()
+            .receiver(FullName::from_slice(b"receiver").unwrap())
+            .sender(FullName::from_slice(b"sender").unwrap())
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -449,14 +429,11 @@ mod test {
     #[test]
     fn test_route_message() {
         let mut c = make_coordinator();
-        let message = Message::build(
-            b"com_B".to_vec(),
-            b"com_A".to_vec(),
-            None,
-            None,
-            1,
-            ruleco::core::ContentTypes::Null,
-        );
+        let message = MessageBuilder::new()
+            .receiver(FullName::from_slice(b"com_B").unwrap())
+            .sender(FullName::from_slice(b"com_A").unwrap())
+            .build()
+            .unwrap();
         let scm = c
             .route_message(MessageContainer {
                 identity: b"id_A".to_vec(),
@@ -472,14 +449,13 @@ mod test {
         let mut c = make_coordinator();
         let request = Request::build(1, "pong");
         let response = Response::build(1, None::<()>);
-        let message = Message::build(
-            b"COORDINATOR".to_vec(),
-            b"N1.com_A".to_vec(),
-            None,
-            None,
-            1,
-            ruleco::core::ContentTypes::Frame(to_vec(&request)),
-        );
+        let message = MessageBuilder::new()
+            .receiver(FullName::from_str("COORDINATOR").unwrap())
+            .sender(FullName::from_str("N1.com_A").unwrap())
+            .message_type(MessageType::Json.into())
+            .payload_single(to_vec(&request))
+            .build()
+            .unwrap();
         let scm = c
             .route_message(MessageContainer {
                 identity: b"id_A".to_vec(),

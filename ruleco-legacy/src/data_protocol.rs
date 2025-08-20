@@ -48,7 +48,7 @@ impl DataMessage {
 /// # Examples
 ///
 /// ```
-/// use ruleco::data_protocol::DataPublisher;
+/// use ruleco_legacy::data_protocol::DataPublisher;
 /// let publisher = DataPublisher::new("pub".to_string(), "localhost", 11100);
 /// publisher.send_message("some message".as_bytes().to_vec());
 /// ```
