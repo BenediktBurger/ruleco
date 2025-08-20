@@ -2,17 +2,13 @@ use crate::adapters::{InMemoryDirectoryAdapter, ProtocolAdapter, SystemClockAdap
 use crate::core::domain::RoutingDecision;
 use crate::core::ports::{MessageSenderPort, RoutingPort};
 use crate::core::CoordinatorCore;
+use crate::jsonrpc_handler::{JsonRpcHandler, JsonRpcOutcome};
 use jsonrpsee_types::request::Request;
-use jsonrpsee_types::{
-    response::{Response, ResponsePayload},
-    ErrorCode, ErrorObject, Id,
-};
+use jsonrpsee_types::{ErrorCode, ErrorObject};
 use ruleco_core::errors::Error;
 use ruleco_core::full_name::FullName;
-use ruleco_core::message::{ConversationId, MessageBuilder, MessageView};
+use ruleco_core::message::MessageView;
 use ruleco_core::protocol_constants::{self, MessageType};
-use serde_json::Value;
-use std::borrow::Cow;
 use std::time::Duration;
 
 /// The main coordinator application that orchestrates the components
@@ -48,57 +44,6 @@ impl CoordinatorApp {
             name,
             running: false,
         })
-    }
-
-    /// Create an error response message
-    fn create_error_response(
-        &self,
-        _recipient_identity: &[u8],
-        recipient_name: &FullName,
-        error: &Error,
-        conversation_id: Option<ConversationId>,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        let error_object: ErrorObject<'static> = match error {
-            Error::Leco(leco_error) => leco_error.clone().into(),
-            Error::JsonRpc(json_rpc_error) => json_rpc_error.clone(),
-            Error::Custom(code, message) => ErrorObject::owned(*code, message.clone(), None::<()>),
-        };
-
-        let error_response = Response::<()>::new(ResponsePayload::Error(error_object), Id::Null);
-        let error_msg = serde_json::to_vec(&error_response)?;
-
-        let message = MessageBuilder::new()
-            .receiver(recipient_name.clone())
-            .sender(self.name.clone())
-            .conversation_id(conversation_id.unwrap_or_default())
-            .message_type(1) // JSON message type
-            .payload_single(error_msg)
-            .build()?;
-
-        Ok(message.to_view()?)
-    }
-
-    /// Create a JSON-RPC response message
-    fn create_json_response(
-        &self,
-        _recipient_identity: &[u8],
-        recipient_name: &FullName,
-        id: Id,
-        result: Value,
-        conversation_id: Option<ConversationId>,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        let response = Response::new(ResponsePayload::Success(Cow::Borrowed(&result)), id);
-        let response_msg = serde_json::to_vec(&response)?;
-
-        let message = MessageBuilder::new()
-            .receiver(recipient_name.clone())
-            .sender(self.name.clone())
-            .conversation_id(conversation_id.unwrap_or_default())
-            .message_type(MessageType::Json.into())
-            .payload_single(response_msg)
-            .build()?;
-
-        Ok(message.to_view()?)
     }
 
     /// Start the coordinator's main loop
@@ -145,9 +90,11 @@ impl CoordinatorApp {
                 error,
                 conversation_id,
             } => {
+                // Create a handler instance for error response creation
+                let handler = JsonRpcHandler::new(&mut self.core, &self.name);
                 match message.sender() {
                     Ok(name) => {
-                        let error_message = self.create_error_response(
+                        let error_message = handler.create_error_response(
                             &identity,
                             name, // Pass the FullName directly
                             &error,
@@ -172,6 +119,9 @@ impl CoordinatorApp {
         identity: &[u8],
         message: &MessageView,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        // Create a handler instance for request handling and error response creation
+        let mut handler = JsonRpcHandler::new(&mut self.core, &self.name);
+
         let content_frame = match message.content_frame() {
             Some(frame) => frame,
             None => {
@@ -198,7 +148,7 @@ impl CoordinatorApp {
             Err(_) => {
                 match message.sender() {
                     Ok(sender_name) => {
-                        let error_message = self.create_error_response(
+                        let error_message = handler.create_error_response(
                             identity,
                             sender_name,
                             &Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)),
@@ -214,74 +164,19 @@ impl CoordinatorApp {
             }
         };
 
-        // Handle different methods
-        match request.method_name() {
-            "sign_in" => {
-                // Extract sender name from message
-                let sender = message
-                    .sender()
-                    .as_ref()
-                    .map_err(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))?;
-                self.core
-                    .handle_sign_in(sender.clone(), identity.to_vec())?;
-                // Send success response
-                let response_message = self.create_json_response(
-                    identity,
-                    sender,
-                    request.id(),
-                    serde_json::Value::Null,
-                    Some(message.header().conversation_id.clone()),
-                )?;
+        let outcome = handler.handle_request(identity, message, request)?;
+        match outcome {
+            JsonRpcOutcome::Response(response_message) => {
                 self.zmq_adapter
                     .send_to_local(identity, &response_message)?;
             }
-            "sign_out" => {
-                // Extract sender name from message
-                let sender = message
-                    .sender()
-                    .as_ref()
-                    .map_err(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))?;
-                self.core.handle_sign_out(sender.clone())?;
-                // Send success response
-                let response_message = self.create_json_response(
-                    identity,
-                    sender,
-                    request.id(),
-                    serde_json::Value::Null,
-                    Some(message.header().conversation_id.clone()),
-                )?;
+            JsonRpcOutcome::Shutdown(response_message) => {
                 self.zmq_adapter
                     .send_to_local(identity, &response_message)?;
-            }
-            "shut_down" => {
                 self.running = false;
-                // Send success response
-                let sender = message
-                    .sender()
-                    .as_ref()
-                    .map_err(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))?;
-                let response_message = self.create_json_response(
-                    identity,
-                    sender,
-                    request.id(),
-                    serde_json::Value::Null,
-                    Some(message.header().conversation_id.clone()),
-                )?;
-                self.zmq_adapter
-                    .send_to_local(identity, &response_message)?;
             }
-            _ => {
-                let sender = message
-                    .sender()
-                    .as_ref()
-                    .map_err(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))?;
-                let error_message = self.create_error_response(
-                    identity,
-                    sender,
-                    &Error::JsonRpc(ErrorObject::from(ErrorCode::MethodNotFound)),
-                    Some(message.header().conversation_id.clone()),
-                )?;
-                self.zmq_adapter.send_to_local(identity, &error_message)?;
+            JsonRpcOutcome::NoAction => {
+                // No response to send
             }
         }
 
