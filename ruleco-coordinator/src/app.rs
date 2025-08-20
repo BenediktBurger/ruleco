@@ -125,23 +125,17 @@ impl CoordinatorApp {
         let content_frame = match message.content_frame() {
             Some(frame) => frame,
             None => {
-                match message.sender() {
-                    Ok(sender_name) => {
-                        let error_message = self.create_error_response(
-                            identity,
-                            sender_name,
-                            &Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)),
-                            Some(message.header().conversation_id.clone()),
-                        )?;
-                        self.zmq_adapter.send_to_local(identity, &error_message)?;
-                    }
-                    Err(e) => {
-                        eprintln!("Error: Malformed sender name in message, cannot send error response: {:?}", e);
-                    }
-                }
+                // Just a heartbeat
                 return Ok(());
             }
         };
+        if message.header().message_type_enum() != MessageType::Json {
+            eprintln!(
+                "Error: Message of unknown type {} received",
+                message.header().message_type_raw()
+            );
+            return Ok(());
+        }
 
         let request: Request = match serde_json::from_slice(content_frame) {
             Ok(req) => req,
@@ -192,5 +186,36 @@ impl CoordinatorApp {
                 String::from_utf8_lossy(&component_name.to_vec())
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ruleco_core::message::MessageBuilder;
+
+    #[test]
+    fn handle_self_message_no_content_frame_returns_ok() {
+        // Create a minimal CoordinatorApp instance for testing
+        let namespace = "test_namespace".to_string();
+        let mut app =
+            CoordinatorApp::new(namespace, Some(0)).expect("Failed to create CoordinatorApp");
+
+        let identity = vec![1, 2, 3, 4];
+
+        let sender_name = FullName::new(b"test_namespace".to_vec(), b"sender".to_vec());
+        let recipient_name = FullName::from_slice(b"test_ns.COORDINATOR").unwrap(); // Send to self
+
+        let message = MessageBuilder::new()
+            .sender(sender_name)
+            .receiver(recipient_name)
+            .build()
+            .unwrap()
+            .to_view()
+            .unwrap();
+
+        // Call handle_self_message and assert it returns Ok
+        let result = app.handle_self_message(&identity, &message);
+        assert!(result.is_ok());
     }
 }
