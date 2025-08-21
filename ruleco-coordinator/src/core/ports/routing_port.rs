@@ -1,4 +1,4 @@
-use crate::core::domain::RoutingDecision;
+use crate::core::{domain::RoutingDecision, ports::message_receiver_port::Identity};
 use ruleco_core::message::MessageView;
 
 /// Interface for routing messages
@@ -14,5 +14,5 @@ pub trait RoutingPort {
     ///
     /// # Returns
     /// A routing decision indicating where the message should be sent
-    fn route_message(&self, message: &MessageView, sender_identity: &[u8]) -> RoutingDecision;
+    fn route_message(&self, message: &MessageView, sender_identity: &Identity) -> RoutingDecision;
 }

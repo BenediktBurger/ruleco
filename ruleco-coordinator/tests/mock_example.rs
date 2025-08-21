@@ -109,6 +109,8 @@ impl ClockPort for MockClock {
 
 #[cfg(test)]
 mod tests {
+    use ruleco_coordinator::core::ports::message_receiver_port::Identity;
+
     use super::*;
 
     #[test]
@@ -140,7 +142,12 @@ mod tests {
             .unwrap();
 
         // Test
-        let decision = core.route_message(&message.to_view().unwrap(), &sender_identity);
+        let decision = core.route_message(
+            &message.to_view().unwrap(),
+            &Identity::Local {
+                identity: sender_identity,
+            },
+        );
 
         // Assertions
         match decision {

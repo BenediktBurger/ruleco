@@ -2,6 +2,7 @@ use jsonrpsee_types::Request;
 use ruleco_coordinator::adapters::{InMemoryDirectoryAdapter, SystemClockAdapter};
 use ruleco_coordinator::core::coordinator_core::CoordinatorCore;
 use ruleco_coordinator::core::domain::{ComponentEntry, CoordinatorEntry, RoutingDecision};
+use ruleco_coordinator::core::ports::message_receiver_port::Identity;
 use ruleco_coordinator::core::ports::{DirectoryPort, RoutingPort};
 use ruleco_core::full_name::FullName;
 use ruleco_core::message::MessageBuilder;
@@ -46,7 +47,12 @@ fn test_route_message_to_local_component() {
         .unwrap();
 
     // Test
-    let decision = core.route_message(&message.to_view().unwrap(), &sender_identity);
+    let decision = core.route_message(
+        &message.to_view().unwrap(),
+        &Identity::Local {
+            identity: sender_identity,
+        },
+    );
 
     // Assertions
     match decision {
@@ -95,7 +101,12 @@ fn test_route_message_to_local_component_without_namespace_in_receiver() {
         .unwrap();
 
     // Test
-    let decision = core.route_message(&message.to_view().unwrap(), &sender_identity);
+    let decision = core.route_message(
+        &message.to_view().unwrap(),
+        &Identity::Local {
+            identity: sender_identity,
+        },
+    );
 
     // Assertions
     match decision {
@@ -132,7 +143,12 @@ fn test_route_sign_in_message_to_coordinator() {
         .unwrap();
 
     // Test
-    let decision = core.route_message(&message.to_view().unwrap(), &sender_identity);
+    let decision = core.route_message(
+        &message.to_view().unwrap(),
+        &Identity::Local {
+            identity: sender_identity,
+        },
+    );
 
     // Assertions
     match decision {
@@ -183,7 +199,12 @@ fn test_route_message_to_remote_component() {
         .unwrap();
 
     // Test
-    let decision = core.route_message(&message.to_view().unwrap(), &sender_identity);
+    let decision = core.route_message(
+        &message.to_view().unwrap(),
+        &Identity::Local {
+            identity: sender_identity,
+        },
+    );
 
     // Assertions
     match decision {
@@ -216,7 +237,12 @@ fn test_route_non_sign_in_message_from_unregistered_component() {
         .unwrap();
 
     // Test
-    let decision = core.route_message(&message.to_view().unwrap(), &sender_identity);
+    let decision = core.route_message(
+        &message.to_view().unwrap(),
+        &Identity::Local {
+            identity: sender_identity,
+        },
+    );
 
     // Assertions
     match decision {

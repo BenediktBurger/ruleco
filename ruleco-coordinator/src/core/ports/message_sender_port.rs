@@ -13,7 +13,7 @@ pub trait MessageSenderPort {
     fn send_to_local(
         &self,
         identity: &[u8],
-        message: &MessageView,
+        message: MessageView,
     ) -> Result<(), Box<dyn std::error::Error>>;
 
     /// Send a message to a remote coordinator
@@ -24,6 +24,6 @@ pub trait MessageSenderPort {
     fn send_to_remote(
         &self,
         dealer_identity: &[u8],
-        message: &MessageView,
+        message: MessageView,
     ) -> Result<(), Box<dyn std::error::Error>>;
 }

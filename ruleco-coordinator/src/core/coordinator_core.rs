@@ -1,4 +1,5 @@
 use crate::core::domain::{ComponentEntry, CoordinatorEntry, RoutingDecision};
+use crate::core::ports::message_receiver_port::Identity;
 use crate::core::ports::{ClockPort, DirectoryPort, RoutingPort};
 use jsonrpsee_types::{ErrorCode, ErrorObject, Request};
 use ruleco_core::errors::Error;
@@ -29,9 +30,13 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
     pub fn handle_sign_in(
         &mut self,
         component_name: FullName,
-        identity: Vec<u8>,
+        identity: Identity,
     ) -> Result<(), Error> {
         // If the component name doesn't have a namespace, prepend our namespace to it
+        let local_identity = match identity {
+            Identity::Local { identity } => Ok(identity),
+            _ => Err(Error::from(ErrorCode::InvalidRequest)),
+        }?;
         let full_name = if component_name.has_namespace() {
             component_name
         } else {
@@ -40,7 +45,7 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
 
         let component = ComponentEntry {
             name: full_name,
-            identity,
+            identity: local_identity,
             last_seen: self.clock.now(),
         };
 
@@ -50,9 +55,24 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
     /// Handle a component signing out
     pub fn handle_sign_out(
         &mut self,
+        identity: Identity,
         component_name: FullName,
     ) -> Result<Option<ComponentEntry>, Error> {
-        self.directory.remove_local_component(component_name)
+        let stored_component = self.directory.get_local_component(&component_name);
+        let local_identity = match identity {
+            Identity::Local { identity } => identity,
+            _ => return Err(Error::from(ErrorCode::InvalidParams)),
+        };
+        match stored_component {
+            Some(component) => {
+                if component.identity == local_identity {
+                    self.directory.remove_local_component(component_name)
+                } else {
+                    return Err(Error::from(ErrorCode::InvalidParams));
+                }
+            }
+            None => return Err(Error::from(ErrorCode::InvalidParams)),
+        }
     }
 
     // Coordinator_sign_in: Just respond with OK
@@ -103,8 +123,7 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
 
 impl<D: DirectoryPort, C: ClockPort> RoutingPort for CoordinatorCore<D, C> {
     /// Route a message based on its destination
-    fn route_message(&self, message: &MessageView, sender_identity: &[u8]) -> RoutingDecision {
-        // Parse sender and receiver
+    fn route_message(&self, message: &MessageView, identity: &Identity) -> RoutingDecision {
         let sender = match message
             .try_sender(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))
         {
@@ -131,32 +150,40 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort for CoordinatorCore<D, C> {
             }
         };
 
+        let is_from_local_namespace =
+            sender.namespace().is_empty() || sender.namespace() == &self.namespace[..];
+
         // Check if sender is signed in (unless it's a sign_in message to coordinator)
         let is_sign_in_to_coordinator =
-            (receiver.name() == b"COORDINATOR") && self.is_sign_in_message(message);
+            (receiver.name() == b"COORDINATOR") && self.is_sign_in_message(&message);
 
-        if !is_sign_in_to_coordinator {
-            // Check if sender is in our local directory with matching identity
-            if let Some(component) = self.directory.get_local_component(&sender) {
-                if component.identity != sender_identity {
-                    return RoutingDecision::Error {
-                        error: Error::duplicate_name_with_data(serde_json::Value::String(
-                            sender.to_string(),
-                        )),
-                        conversation_id: Some(message.header().conversation_id.clone())
-                            .unwrap_or_default(),
-                    };
+        if is_from_local_namespace && !is_sign_in_to_coordinator {
+            match identity {
+                Identity::Local { identity } => {
+                    // Check if sender is in our local directory with matching identity
+                    if let Some(component) = self.directory.get_local_component(&sender) {
+                        if component.identity != *identity {
+                            return RoutingDecision::Error {
+                                error: Error::duplicate_name_with_data(serde_json::Value::String(
+                                    sender.to_string(),
+                                )),
+                                conversation_id: Some(message.header().conversation_id.clone())
+                                    .unwrap_or_default(),
+                            };
+                        }
+
+                        // Note: We don't update the last seen time here because this method is immutable.
+                        // Last seen updates should happen elsewhere, possibly in the application layer
+                        // after successful routing.
+                    } else {
+                        return RoutingDecision::Error {
+                            error: Error::not_signed_in(),
+                            conversation_id: Some(message.header().conversation_id.clone())
+                                .unwrap_or_default(),
+                        };
+                    }
                 }
-
-                // Note: We don't update the last seen time here because this method is immutable.
-                // Last seen updates should happen elsewhere, possibly in the application layer
-                // after successful routing.
-            } else {
-                return RoutingDecision::Error {
-                    error: Error::not_signed_in(),
-                    conversation_id: Some(message.header().conversation_id.clone())
-                        .unwrap_or_default(),
-                };
+                _ => {}
             }
         }
 

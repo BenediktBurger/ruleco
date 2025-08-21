@@ -1,3 +1,4 @@
+use crate::core::ports::message_receiver_port::Identity;
 use crate::core::ports::{MessageReceiverPort, MessageSenderPort};
 use ruleco_core::message::MessageView;
 use zmq;
@@ -94,11 +95,56 @@ impl ZmqAdapter {
         Ok(readable_indices)
     }
 
+    /// Receive all available messages within a timeout
+    fn receive_messages_impl(
+        &self,
+        timeout_ms: u64,
+    ) -> Result<Vec<(Identity, MessageView)>, Box<dyn std::error::Error>> {
+        let mut messages: Vec<(Identity, MessageView)> = Vec::new();
+
+        // Poll for messages with a timeout
+        let readable_indices = self.poll_messages(timeout_ms as i64)?;
+
+        if !readable_indices.is_empty() {
+            // Collect dealer identities first
+            let dealer_identities: Vec<Vec<u8>> = self
+                .dealer_sockets_iter()
+                .map(|(identity, _)| identity.clone())
+                .collect();
+
+            // Process messages based on which sockets are readable
+            // Router socket is first in poll_items (index 0)
+            if readable_indices.contains(&0) {
+                let (identity, message) = Self::receive_message_impl(&self.router_socket)?;
+                messages.push((Identity::Local { identity }, message));
+            }
+
+            // Process dealer messages for readable sockets
+            // Dealer sockets start from index 1 in poll_items
+            for &index in &readable_indices {
+                if index > 0 && index <= dealer_identities.len() {
+                    let dealer_identity = &dealer_identities[index - 1];
+                    let message = Self::receive_message_from_dealer_impl(
+                        self.dealer_sockets.get(dealer_identity).unwrap(),
+                    )?;
+                    messages.push((
+                        Identity::Remote {
+                            identity: dealer_identity.clone(),
+                        },
+                        message,
+                    ));
+                }
+            }
+        }
+
+        Ok(messages)
+    }
+
     /// Send a message to a local component
     fn send_to_local_impl(
         &self,
         identity: &[u8],
-        message: &MessageView,
+        message: MessageView,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.router_socket.send(identity, zmq::SNDMORE)?;
         self.router_socket.send_multipart(message.raw_frames(), 0)?;
@@ -109,7 +155,7 @@ impl ZmqAdapter {
     fn send_to_remote_impl(
         &self,
         dealer_identity: &[u8],
-        message: &MessageView,
+        message: MessageView,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(socket) = self.dealer_sockets.get(dealer_identity) {
             socket.send_multipart(message.raw_frames(), 0)?;
@@ -149,7 +195,7 @@ impl MessageSenderPort for ZmqAdapter {
     fn send_to_local(
         &self,
         identity: &[u8],
-        message: &MessageView,
+        message: MessageView,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.send_to_local_impl(identity, message)
     }
@@ -157,7 +203,7 @@ impl MessageSenderPort for ZmqAdapter {
     fn send_to_remote(
         &self,
         dealer_identity: &[u8],
-        message: &MessageView,
+        message: MessageView,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.send_to_remote_impl(dealer_identity, message)
     }
@@ -179,5 +225,12 @@ impl MessageReceiverPort for ZmqAdapter {
             .get(dealer_identity)
             .ok_or_else(|| -> Box<dyn std::error::Error> { "Dealer socket not found".into() })?;
         Self::receive_message_from_dealer_impl(socket)
+    }
+
+    fn receive_messages(
+        &self,
+        timeout_ms: u64,
+    ) -> Result<Vec<(Identity, MessageView)>, Box<dyn std::error::Error>> {
+        self.receive_messages_impl(timeout_ms)
     }
 }
