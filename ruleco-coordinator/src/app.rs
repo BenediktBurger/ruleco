@@ -1,6 +1,6 @@
-use crate::adapters::{InMemoryDirectoryAdapter, ProtocolAdapter, SystemClockAdapter, ZmqAdapter};
+use crate::adapters::{InMemoryDirectoryAdapter, SystemClockAdapter, ZmqAdapter};
 use crate::core::domain::RoutingDecision;
-use crate::core::ports::{MessageSenderPort, RoutingPort};
+use crate::core::ports::{MessageReceiverPort, MessageSenderPort, RoutingPort};
 use crate::core::CoordinatorCore;
 use crate::jsonrpc_handler::{JsonRpcHandler, JsonRpcOutcome};
 use jsonrpsee_types::request::Request;
@@ -10,13 +10,12 @@ use ruleco_core::full_name::FullName;
 use ruleco_core::message::MessageView;
 use ruleco_core::protocol_constants::{self, MessageType};
 use std::time::Duration;
-use zmq;
 
 /// The main coordinator application that orchestrates the components
 pub struct CoordinatorApp {
     /// The core coordinator logic
     core: CoordinatorCore<InMemoryDirectoryAdapter, SystemClockAdapter>,
-    /// The ZMQ adapter for message sending
+    /// The ZMQ adapter for message sending and receiving
     zmq_adapter: ZmqAdapter,
     /// Our name as a FullName
     name: FullName,
@@ -67,36 +66,16 @@ impl CoordinatorApp {
 
     /// Poll for messages and process them
     fn poll_and_process_messages(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Collect dealer identities first
-        let dealer_identities: Vec<Vec<u8>> = self
-            .zmq_adapter
-            .dealer_sockets_iter()
-            .map(|(identity, _)| identity.clone())
-            .collect();
+        // Poll for messages with a timeout
+        let readable_indices = self.zmq_adapter.poll_messages(100)?;
 
-        // Create a separate vector for poll items to avoid borrowing conflicts
-        let mut poll_items = {
-            let router_poll_item = self.zmq_adapter.router_socket().as_poll_item(zmq::POLLIN);
-            let dealer_poll_items: Vec<_> = self
+        if !readable_indices.is_empty() {
+            // Collect dealer identities first
+            let dealer_identities: Vec<Vec<u8>> = self
                 .zmq_adapter
                 .dealer_sockets_iter()
-                .map(|(_, socket)| socket.as_poll_item(zmq::POLLIN))
+                .map(|(identity, _)| identity.clone())
                 .collect();
-
-            let mut items = vec![router_poll_item];
-            items.extend(dealer_poll_items);
-            items
-        };
-
-        // Poll for messages with a timeout
-        if zmq::poll(&mut poll_items[..], 100)? > 0 {
-            // Collect indices of readable sockets first
-            let mut readable_indices = Vec::new();
-            for (i, poll_item) in poll_items.iter().enumerate() {
-                if poll_item.is_readable() {
-                    readable_indices.push(i);
-                }
-            }
 
             // Process messages based on which sockets are readable
             // Router socket is first in poll_items (index 0)
@@ -118,8 +97,7 @@ impl CoordinatorApp {
 
     /// Process a single message from the router socket
     fn process_router_message(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let (identity, message) =
-            ProtocolAdapter::receive_message(self.zmq_adapter.router_socket())?;
+        let (identity, message) = self.zmq_adapter.receive_message_from_local()?;
 
         let decision = self.core.route_message(&message, &identity);
 
@@ -153,9 +131,9 @@ impl CoordinatorApp {
         dealer_identity: &[u8],
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Receive message from dealer socket
-        let message = ProtocolAdapter::receive_message_from_dealer(
-            self.zmq_adapter.get_dealer_socket(dealer_identity)?,
-        )?;
+        let message = self
+            .zmq_adapter
+            .receive_message_from_remote(dealer_identity)?;
 
         // For messages from coordinators, we need special handling for coordinator_sign_in
         // since they're allowed to send messages without being fully signed in yet
@@ -444,26 +422,6 @@ impl CoordinatorApp {
         Ok(())
     }
 
-    /// Handle messages addressed to this coordinator from another coordinator
-    fn handle_self_message_from_coordinator(
-        &mut self,
-        dealer_identity: &[u8],
-        message: &MessageView,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // This method is kept for backward compatibility but delegates to the unified handler
-        self.handle_self_message(dealer_identity, message, false)
-    }
-
-    /// Handle messages addressed to this coordinator from a local component
-    fn handle_self_message_from_router(
-        &mut self,
-        identity: &[u8],
-        message: &MessageView,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // This method is kept for backward compatibility but delegates to the unified handler
-        self.handle_self_message(identity, message, true)
-    }
-
     /// Check for timed out components
     fn check_timeouts(&mut self) {
         let timed_out_components = self.core.check_timeouts(Duration::from_secs(30));
@@ -502,7 +460,7 @@ mod tests {
             .unwrap();
 
         // Call handle_self_message and assert it returns Ok
-        let result = app.handle_self_message_from_router(&identity, &message);
+        let result = app.handle_self_message(&identity, &message, true);
         assert!(result.is_ok());
     }
 }

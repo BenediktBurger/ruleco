@@ -32,12 +32,13 @@ The coordinator follows a hexagonal (ports and adapters) architecture pattern:
 2. **Ports** (`ruleco-coordinator/src/core/ports/`)
    - Define interfaces for external dependencies:
      - `MessageSenderPort`: Interface for sending messages (local/remote/error responses)
+     - `MessageReceiverPort`: Interface for receiving messages (local/remote)
      - `DirectoryPort`: Interface for component/coordinator directory management
      - `ClockPort`: Interface for time-related operations
 
 3. **Adapters** (`ruleco-coordinator/src/adapters/`)
    - Implement the port interfaces with concrete technologies:
-     - `ZmqAdapter`: Implements `MessageSenderPort` using ZeroMQ sockets
+     - `ZmqAdapter`: Implements `MessageSenderPort` and `MessageReceiverPort` using ZeroMQ sockets
      - `InMemoryDirectoryAdapter`: Implements `DirectoryPort` with in-memory storage
      - `SystemClockAdapter`: Implements `ClockPort` using system time
 
