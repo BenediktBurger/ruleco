@@ -55,6 +55,8 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
         self.directory.remove_local_component(component_name)
     }
 
+    // Coordinator_sign_in: Just respond with OK
+
     /// Check for timed out components
     pub fn check_timeouts(&mut self, timeout_duration: std::time::Duration) -> Vec<FullName> {
         let now = self.clock.now();
@@ -103,7 +105,9 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort for CoordinatorCore<D, C> {
     /// Route a message based on its destination
     fn route_message(&self, message: &MessageView, sender_identity: &[u8]) -> RoutingDecision {
         // Parse sender and receiver
-        let sender = match message.try_sender(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError))) {
+        let sender = match message
+            .try_sender(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))
+        {
             Ok(sender) => sender,
             Err(error) => {
                 return RoutingDecision::Error {
@@ -114,7 +118,9 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort for CoordinatorCore<D, C> {
             }
         };
 
-        let receiver = match message.try_receiver(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError))) {
+        let receiver = match message
+            .try_receiver(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))
+        {
             Ok(receiver) => receiver,
             Err(error) => {
                 return RoutingDecision::Error {
@@ -134,7 +140,9 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort for CoordinatorCore<D, C> {
             if let Some(component) = self.directory.get_local_component(&sender) {
                 if component.identity != sender_identity {
                     return RoutingDecision::Error {
-                        error: Error::duplicate_name_with_data(serde_json::Value::String(sender.to_string())),
+                        error: Error::duplicate_name_with_data(serde_json::Value::String(
+                            sender.to_string(),
+                        )),
                         conversation_id: Some(message.header().conversation_id.clone())
                             .unwrap_or_default(),
                     };

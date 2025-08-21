@@ -226,20 +226,6 @@ impl<'a> JsonRpcHandler<'a> {
             );
         }
 
-        // Get the namespace from the sender
-        let namespace = sender.namespace();
-
-        // For now, we'll use a placeholder address - in a real implementation,
-        // this would come from the connection information
-        let address = "unknown".to_string();
-
-        // Handle the coordinator sign-in
-        self.core.handle_coordinator_sign_in(
-            namespace,
-            identity.to_vec(), // dealer identity
-            address,
-        )?;
-
         // Return success response
         self.create_null_response(identity, message, id)
     }

@@ -48,6 +48,21 @@ impl ZmqAdapter {
         &self.router_socket
     }
 
+    /// Get a reference to a dealer socket
+    pub fn get_dealer_socket(
+        &self,
+        dealer_identity: &[u8],
+    ) -> Result<&zmq::Socket, Box<dyn std::error::Error>> {
+        self.dealer_sockets
+            .get(dealer_identity)
+            .ok_or_else(|| "Dealer socket not found".into())
+    }
+
+    /// Iterator over dealer sockets
+    pub fn dealer_sockets_iter(&self) -> impl Iterator<Item = (&Vec<u8>, &zmq::Socket)> {
+        self.dealer_sockets.iter()
+    }
+
     /// Send a message to a local component
     fn send_to_local_impl(
         &self,

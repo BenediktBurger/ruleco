@@ -1,30 +1,32 @@
-use ruleco_core::message::{MessageError, MessageView};
+use ruleco_core::message::MessageView;
+use zmq;
 
-/// Protocol adapter for parsing ZMQ frames into messages
+/// Adapter for ZMQ protocol operations
 pub struct ProtocolAdapter;
 
 impl ProtocolAdapter {
-    /// Create a new protocol adapter
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Parse ZMQ frames into a message
-    ///
-    /// Takes ownership of the frames and creates a zero-copy MessageView.
-    pub fn parse_message(frames: Vec<Vec<u8>>) -> Result<MessageView, MessageError> {
-        MessageView::new(frames)
-    }
-
-    /// Receive a message from a ZMQ socket
-    ///
-    /// Returns the identity frame and a zero-copy view of the message.
+    /// Receive a message from a socket, returning the identity and message
     pub fn receive_message(
         socket: &zmq::Socket,
     ) -> Result<(Vec<u8>, MessageView), Box<dyn std::error::Error>> {
         let identity = socket.recv_bytes(0)?;
         let frames = socket.recv_multipart(0)?;
-        let message = Self::parse_message(frames)?;
+        let message = MessageView::new(frames)?;
+
         Ok((identity, message))
+    }
+
+    /// Receive a message from a dealer socket (no identity part)
+    pub fn receive_message_from_dealer(
+        socket: &zmq::Socket,
+    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+        let frames = socket.recv_multipart(0)?;
+        if frames.is_empty() {
+            return Err("Invalid message format: no parts".into());
+        }
+
+        let message = MessageView::new(frames)?;
+
+        Ok(message)
     }
 }
