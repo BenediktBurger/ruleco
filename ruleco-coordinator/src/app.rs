@@ -26,7 +26,7 @@ pub struct CoordinatorApp<T = ZmqAdapter> {
 
 impl CoordinatorApp<ZmqAdapter> {
     /// Create a new coordinator application
-    pub fn new(namespace: String, port: Option<u16>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(namespace: &str, port: Option<u16>) -> Result<Self, Box<dyn std::error::Error>> {
         let port = port.unwrap_or(protocol_constants::DEFAULT_COORDINATOR_PORT);
         let mut zmq_adapter = ZmqAdapter::new()?;
         zmq_adapter.bind_router(&format!("tcp://*:{}", &port))?;
@@ -40,7 +40,7 @@ where
 {
     /// Create a new coordinator application with a specific adapter
     pub fn new_with_adapter(
-        namespace: String,
+        namespace: &str,
         adapter: T,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let namespace_bytes = namespace.as_bytes().to_vec();
@@ -287,10 +287,59 @@ mod tests {
             .join("\n")
     }
 
+    static NAMESPACE: &str = "test_namespace";
+    static _REMOTE_NAMESPACE: &str = "remote_namespace";
+    static COMPONENT1_IDENTITY: &[u8] = b"com1";
+    static COMPONENT2_IDENTITY: &[u8] = b"com2";
+    static _DEALER_IDENTITY: &[u8] = b"deal";
+
+    fn self_name() -> FullName {
+        FullName::from_str(&format!("{}.{}", NAMESPACE, "COORDINATOR")).unwrap()
+    }
+
+    fn component1_name() -> FullName {
+        FullName::new(NAMESPACE.as_bytes().to_vec(), b"component1".to_vec())
+    }
+
+    fn component2_name() -> FullName {
+        FullName::new(NAMESPACE.as_bytes().to_vec(), b"component2".to_vec())
+    }
+
+    /// Create a default Coordinator app for tests
+    ///
+    /// Contains already two Components and a Coordinator configured.
+    fn create_default_app() -> CoordinatorApp<MockAdapter> {
+        let mock_adapter = MockAdapter::new();
+        let mut app = CoordinatorApp::new_with_adapter(NAMESPACE, mock_adapter)
+            .expect("Failed to create CoordinatorApp");
+
+        // Register a local component in the directory
+
+        // Sign in the component
+        app.core()
+            .handle_sign_in(
+                component1_name(),
+                Identity::Local {
+                    identity: COMPONENT1_IDENTITY.to_vec(),
+                },
+            )
+            .expect("Failed to sign in component");
+        app.core()
+            .handle_sign_in(
+                component2_name(),
+                Identity::Local {
+                    identity: COMPONENT2_IDENTITY.to_vec(),
+                },
+            )
+            .expect("Failed to sign in component");
+
+        app
+    }
+
     #[test]
     fn handle_self_message_no_content_frame_returns_ok() {
         // Create a minimal CoordinatorApp instance for testing
-        let namespace = "test_namespace".to_string();
+        let namespace = NAMESPACE;
         let mut app =
             CoordinatorApp::new(namespace, Some(0)).expect("Failed to create CoordinatorApp");
 
@@ -314,42 +363,12 @@ mod tests {
 
     #[test]
     fn test_process_read_message_local_routing() {
-        // Create a mock adapter
-        let mock_adapter = MockAdapter::new();
-
-        // Create a coordinator app with the mock adapter
-        let namespace = "test_namespace".to_string();
-        let mut app = CoordinatorApp::new_with_adapter(namespace, mock_adapter)
-            .expect("Failed to create CoordinatorApp");
-
-        // Register a local component in the directory
-        let component_name = FullName::new(b"test_namespace".to_vec(), b"test_component".to_vec());
-        let component_identity = vec![1, 2, 3, 4];
-        let sender_name = FullName::new(b"test_namespace".to_vec(), b"sender".to_vec());
-        let sender_identity = vec![5, 6, 7, 8];
-
-        // Sign in the component
-        app.core()
-            .handle_sign_in(
-                component_name.clone(),
-                Identity::Local {
-                    identity: component_identity.clone(),
-                },
-            )
-            .expect("Failed to sign in component");
-        app.core()
-            .handle_sign_in(
-                sender_name.clone(),
-                Identity::Local {
-                    identity: sender_identity.clone(),
-                },
-            )
-            .expect("Failed to sign in component");
+        let mut app = create_default_app();
 
         // Create a message from another component to the registered component
         let message = MessageBuilder::new()
-            .sender(sender_name)
-            .receiver(component_name)
+            .sender(component1_name())
+            .receiver(component2_name())
             .payload_single(b"test_content".to_vec())
             .build()
             .unwrap()
@@ -359,7 +378,7 @@ mod tests {
         // Process the message
         let result = app.process_read_message(
             Identity::Local {
-                identity: sender_identity,
+                identity: COMPONENT1_IDENTITY.to_vec(),
             },
             message.clone(),
         );
@@ -389,10 +408,10 @@ mod tests {
         }
 
         // Custom assertion for target identity with debug output
-        if sent_messages[0].0 != component_identity {
+        if sent_messages[0].0 != COMPONENT2_IDENTITY {
             panic!(
                 "Target identity mismatch.\nExpected: {:?}\nGot: {:?}\nMessage frames:\n{}",
-                component_identity,
+                COMPONENT2_IDENTITY,
                 sent_messages[0].0,
                 format_message_frames(sent_messages[0].1.raw_frames())
             );
@@ -410,22 +429,16 @@ mod tests {
 
     #[test]
     fn test_process_read_message_coordinator_sign_in() {
-        // Create a coordinator app with a mock adapter
-        let mock_adapter = MockAdapter::new();
-        let namespace = "test_namespace".to_string();
-        let mut app = CoordinatorApp::new_with_adapter(namespace, mock_adapter)
-            .expect("Failed to create CoordinatorApp");
+        let mut app = create_default_app();
 
         // Create a coordinator sign-in message
-        let coordinator_name = FullName::new(b"remote_namespace".to_vec(), b"COORDINATOR".to_vec());
+        let coordinator_name =
+            FullName::new(b"remote_namespace2".to_vec(), b"COORDINATOR".to_vec());
         let request_json = r#"{"jsonrpc":"2.0","method":"coordinator_sign_in","id":1}"#;
 
         let message = MessageBuilder::new()
             .sender(coordinator_name)
-            .receiver(FullName::new(
-                b"test_namespace".to_vec(),
-                b"COORDINATOR".to_vec(),
-            ))
+            .receiver(self_name())
             .payload_single(request_json.as_bytes().to_vec())
             .message_type(ruleco_core::protocol_constants::MessageType::Json.into())
             .build()
@@ -507,29 +520,15 @@ mod tests {
 
     #[test]
     fn test_process_read_message_self_target() {
-        // Create a coordinator app with a mock adapter
-        let mock_adapter = MockAdapter::new();
-        let namespace = "test_namespace".to_string();
-        let mut app = CoordinatorApp::new_with_adapter(namespace, mock_adapter)
-            .expect("Failed to create CoordinatorApp");
+        let mut app = create_default_app();
 
         // Create a message addressed to the coordinator itself
-        let sender_name = FullName::new(b"test_namespace".to_vec(), b"sender".to_vec());
-        let sender_identity = vec![1, 2, 3, 4];
-        let recipient_name = FullName::new(b"test_namespace".to_vec(), b"COORDINATOR".to_vec());
+        let sender_identity = COMPONENT1_IDENTITY.to_vec();
         let request_json = r#"{"jsonrpc":"2.0","method":"some_method","id":1}"#;
-        app.core()
-            .handle_sign_in(
-                sender_name.clone(),
-                Identity::Local {
-                    identity: sender_identity.clone(),
-                },
-            )
-            .expect("Failed to sign in component");
 
         let message = MessageBuilder::new()
-            .sender(sender_name)
-            .receiver(recipient_name)
+            .sender(component1_name())
+            .receiver(self_name())
             .payload_single(request_json.as_bytes().to_vec())
             .message_type(ruleco_core::protocol_constants::MessageType::Json.into())
             .build()
