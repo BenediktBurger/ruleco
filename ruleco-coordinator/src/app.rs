@@ -287,11 +287,21 @@ mod tests {
             .join("\n")
     }
 
+    fn assert_messages_are_equal(sent_message: &MessageView, message: &MessageView) {
+        if sent_message != message {
+            panic!(
+                "Message content mismatch.\nExpected frames:\n{}\nGot frames:\n{}",
+                format_message_frames(message.raw_frames()),
+                format_message_frames(sent_message.raw_frames())
+            );
+        }
+    }
+
     static NAMESPACE: &str = "test_namespace";
-    static _REMOTE_NAMESPACE: &str = "remote_namespace";
+    static REMOTE_NAMESPACE: &str = "remote_namespace";
     static COMPONENT1_IDENTITY: &[u8] = b"com1";
     static COMPONENT2_IDENTITY: &[u8] = b"com2";
-    static _DEALER_IDENTITY: &[u8] = b"deal";
+    static DEALER_IDENTITY: &[u8] = b"deal";
 
     fn self_name() -> FullName {
         FullName::from_str(&format!("{}.{}", NAMESPACE, "COORDINATOR")).unwrap()
@@ -418,13 +428,64 @@ mod tests {
         }
 
         // Custom assertion for message content with debug output
-        if sent_messages[0].1.raw_frames() != message.raw_frames() {
-            panic!(
-                "Message content mismatch.\nExpected frames:\n{}\nGot frames:\n{}",
-                format_message_frames(message.raw_frames()),
-                format_message_frames(sent_messages[0].1.raw_frames())
-            );
-        }
+        assert_messages_are_equal(&sent_messages[0].1, &message);
+    }
+
+    #[test]
+    fn test_process_read_message_from_remote_to_local() {
+        let mut app = create_default_app();
+        let message = MessageBuilder::new()
+            .sender(
+                FullName::from_str(&format!("{}.{}", REMOTE_NAMESPACE, "some_component")).unwrap(),
+            )
+            .receiver(component1_name())
+            .build()
+            .unwrap()
+            .to_view()
+            .unwrap();
+
+        let result = app.process_read_message(
+            Identity::Remote {
+                identity: DEALER_IDENTITY.to_vec(),
+            },
+            message.clone(),
+        );
+        assert!(result.is_ok());
+
+        let sent_messages = app.adapter.get_sent_to_local();
+        assert_eq!(sent_messages.len(), 1);
+        assert_eq!(sent_messages[0].0, COMPONENT1_IDENTITY);
+
+        assert_messages_are_equal(&sent_messages[0].1, &message);
+    }
+
+    #[test]
+    #[ignore] // not yet implemented, as there is no coordinator log in.
+    fn test_process_read_message_from_local_to_remote() {
+        let mut app = create_default_app();
+        let message = MessageBuilder::new()
+            .sender(component1_name())
+            .receiver(
+                FullName::from_str(&format!("{}.{}", REMOTE_NAMESPACE, "some_component")).unwrap(),
+            )
+            .build()
+            .unwrap()
+            .to_view()
+            .unwrap();
+
+        let result = app.process_read_message(
+            Identity::Local {
+                identity: COMPONENT1_IDENTITY.to_vec(),
+            },
+            message.clone(),
+        );
+        assert!(result.is_ok());
+
+        let sent_messages = app.adapter.get_sent_to_remote();
+        assert_eq!(sent_messages.len(), 1);
+        assert_eq!(sent_messages[0].0, DEALER_IDENTITY);
+
+        assert_messages_are_equal(&sent_messages[0].1, &message);
     }
 
     #[test]

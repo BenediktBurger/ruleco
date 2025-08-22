@@ -12,3 +12,4 @@ ruleco-core = { path = "../ruleco-core"}
 
 [dev-dependencies]
 mockall = "0.13.1"
+rstest = "0.26"
