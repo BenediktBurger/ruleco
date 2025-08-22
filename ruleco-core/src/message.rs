@@ -141,7 +141,7 @@ impl From<MessageError> for io::Error {
 /// This struct owns the raw frame data and provides zero-copy views into it,
 /// allowing efficient inspection without copying the underlying data
 /// during parsing from raw frames.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageView {
     frames: Vec<Vec<u8>>,
     version: u8,
