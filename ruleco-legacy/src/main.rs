@@ -1,4 +1,4 @@
-use ruleco;
+use ruleco_legacy as ruleco;
 use std::{thread, time};
 
 fn main() {
