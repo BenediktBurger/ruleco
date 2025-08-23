@@ -1,7 +1,9 @@
 use crate::adapters::{InMemoryDirectoryAdapter, SystemClockAdapter, ZmqAdapter};
 use crate::core::domain::RoutingDecision;
 use crate::core::ports::message_receiver_port::Identity;
-use crate::core::ports::{MessageReceiverPort, MessageSenderPort, RoutingPort};
+use crate::core::ports::{
+    ConnectionManagementPort, MessageReceiverPort, MessageSenderPort, RoutingPort,
+};
 use crate::core::CoordinatorCore;
 use crate::jsonrpc_handler::{JsonRpcHandler, JsonRpcOutcome};
 use jsonrpsee_types::request::Request;
@@ -36,7 +38,7 @@ impl CoordinatorApp<ZmqAdapter> {
 
 impl<T> CoordinatorApp<T>
 where
-    T: MessageSenderPort + MessageReceiverPort,
+    T: MessageSenderPort + MessageReceiverPort + ConnectionManagementPort,
 {
     /// Create a new coordinator application with a specific adapter
     pub fn new_with_adapter(

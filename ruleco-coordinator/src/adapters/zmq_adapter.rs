@@ -1,5 +1,5 @@
 use crate::core::ports::message_receiver_port::Identity;
-use crate::core::ports::{MessageReceiverPort, MessageSenderPort};
+use crate::core::ports::{ConnectionManagementPort, MessageReceiverPort, MessageSenderPort};
 use ruleco_core::message::MessageView;
 use zmq;
 
@@ -27,13 +27,13 @@ impl ZmqAdapter {
     }
 
     /// Bind the router socket to an address
-    pub fn bind_router(&mut self, address: &str) -> Result<(), Box<dyn std::error::Error>> {
+    fn bind_router_impl(&mut self, address: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.router_socket.bind(address)?;
         Ok(())
     }
 
     /// Connect to a remote coordinator
-    pub fn connect_to_coordinator(
+    fn connect_to_coordinator_impl(
         &mut self,
         dealer_identity: Vec<u8>,
         address: &str,
@@ -45,7 +45,7 @@ impl ZmqAdapter {
     }
 
     /// Disconnect from a remote coordinator
-    pub fn disconnect_from_coordinator(
+    fn disconnect_from_coordinator_impl(
         &mut self,
         dealer_identity: &[u8],
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -54,7 +54,7 @@ impl ZmqAdapter {
     }
 
     /// Iterator over dealer sockets
-    pub fn dealer_sockets_iter(&self) -> impl Iterator<Item = (&Vec<u8>, &zmq::Socket)> {
+    fn dealer_sockets_iter(&self) -> impl Iterator<Item = (&Vec<u8>, &zmq::Socket)> {
         self.dealer_sockets.iter()
     }
 
@@ -65,7 +65,7 @@ impl ZmqAdapter {
     ///
     /// # Returns
     /// A vector of indices of readable sockets, or empty vector if no sockets are readable
-    pub fn poll_messages(&self, timeout_ms: i64) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
+    fn poll_messages(&self, timeout_ms: i64) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
         // Pre-allocate poll items vector with capacity for router + estimated dealer sockets
         // This reduces allocations compared to the previous approach
         let mut poll_items = Vec::with_capacity(1 + self.dealer_sockets.len());
@@ -232,5 +232,26 @@ impl MessageReceiverPort for ZmqAdapter {
         timeout_ms: u64,
     ) -> Result<Vec<(Identity, MessageView)>, Box<dyn std::error::Error>> {
         self.receive_messages_impl(timeout_ms)
+    }
+}
+
+impl ConnectionManagementPort for ZmqAdapter {
+    fn connect_to_coordinator(
+        &mut self,
+        dealer_identity: Vec<u8>,
+        address: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.connect_to_coordinator_impl(dealer_identity, address)
+    }
+
+    fn disconnect_from_coordinator(
+        &mut self,
+        dealer_identity: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.disconnect_from_coordinator_impl(dealer_identity)
+    }
+
+    fn bind_router(&mut self, address: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.bind_router_impl(address)
     }
 }

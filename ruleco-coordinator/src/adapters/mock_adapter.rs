@@ -1,5 +1,5 @@
 use crate::core::ports::message_receiver_port::Identity;
-use crate::core::ports::{MessageReceiverPort, MessageSenderPort};
+use crate::core::ports::{ConnectionManagementPort, MessageReceiverPort, MessageSenderPort};
 use ruleco_core::message::MessageView;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -138,5 +138,29 @@ impl MessageReceiverPort for MockAdapter {
         }
 
         Ok(messages)
+    }
+}
+
+impl ConnectionManagementPort for MockAdapter {
+    fn connect_to_coordinator(
+        &mut self,
+        _dealer_identity: Vec<u8>,
+        _address: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // For testing, we don't actually connect to anything
+        Ok(())
+    }
+
+    fn disconnect_from_coordinator(
+        &mut self,
+        _dealer_identity: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // For testing, we don't actually disconnect from anything
+        Ok(())
+    }
+
+    fn bind_router(&mut self, _address: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // For testing, we don't actually bind to anything
+        Ok(())
     }
 }

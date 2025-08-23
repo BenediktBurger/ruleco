@@ -43,6 +43,7 @@ pub trait MessageReceiverPort {
 }
 
 /// Identity of the sender from which the message came.
+#[derive(Clone, Debug)]
 pub enum Identity {
     SELF,
     Local { identity: Vec<u8> },
