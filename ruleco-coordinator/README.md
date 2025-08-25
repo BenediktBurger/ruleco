@@ -13,12 +13,14 @@ The coordinator follows a hexagonal (ports and adapters) architecture pattern:
 ### Ports (Interfaces)
 
 - **MessageSenderPort**: Interface for sending messages
+- **MessageReceiverPort**: Interface for receiving messages
+- **ConnectionManagementPort**: Interface for managing network connections
 - **DirectoryPort**: Interface for component/coordinator directory management
 - **ClockPort**: Interface for time-related operations
 
 ### Adapters (Implementations)
 
-- **ZmqAdapter**: Implements MessageSenderPort and MessageReceiverPort using ZeroMQ sockets and handles message polling
+- **ZmqAdapter**: Implements MessageSenderPort, MessageReceiverPort, and ConnectionManagementPort using ZeroMQ sockets and handles message polling
 - **InMemoryDirectoryAdapter**: Implements DirectoryPort with in-memory storage
 - **SystemClockAdapter**: Implements ClockPort using system time
 
