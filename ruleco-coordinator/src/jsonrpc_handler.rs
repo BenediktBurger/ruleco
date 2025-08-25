@@ -2,6 +2,7 @@ use crate::adapters::{InMemoryDirectoryAdapter, SystemClockAdapter};
 use crate::core::ports::message_receiver_port::Identity;
 use crate::core::CoordinatorCore;
 use jsonrpsee_types::request::Request;
+use jsonrpsee_types::Params;
 use jsonrpsee_types::{
     response::{Response, ResponsePayload},
     ErrorCode, ErrorObject, Id,
@@ -20,7 +21,7 @@ pub enum JsonRpcOutcome {
     /// A response message should be sent, but to a specific identity.
     ResponseToIdentity((Identity, MessageView)),
     /// The coordinator should shut down.
-    Shutdown(MessageView),
+    Shutdown,
     /// No specific action is required (e.g., for notifications).
     NoAction,
 }
@@ -42,50 +43,223 @@ impl<'a> JsonRpcHandler<'a> {
         Self { core, name }
     }
 
+    /// Handle a JSON-RPC message, which could be a single request or a batch request
+    pub fn handle_jsonrpc_message(
+        &mut self,
+        identity: Identity,
+        message: &MessageView,
+        content_frame: &[u8],
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        // First, try to parse as a JSON value to determine if it's a batch
+        let json_value: serde_json::Value = match serde_json::from_slice(content_frame) {
+            Ok(value) => value,
+            Err(_) => {
+                match message.sender() {
+                    Ok(sender_name) => {
+                        let error_message = self.create_error_response(
+                            sender_name,
+                            &Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)),
+                            Some(message.header().conversation_id.clone()),
+                        )?;
+                        return Ok(vec![JsonRpcOutcome::Response(error_message)]);
+                    }
+                    Err(e) => {
+                        eprintln!("Error: Malformed sender name in message, cannot send error response: {:?}", e);
+                        return Ok(vec![]);
+                    }
+                }
+            }
+        };
+
+        // Check if it's a batch request (array) or single request (object)
+        match json_value {
+            serde_json::Value::Array(requests) => {
+                self.handle_batch_request(identity, message, requests)
+            }
+            serde_json::Value::Object(_) => {
+                // Handle single request by converting back to bytes and parsing as Request
+                let request_bytes = serde_json::to_vec(&json_value)?;
+                match serde_json::from_slice::<Request>(&request_bytes) {
+                    Ok(request) => self.handle_request(identity, message, request),
+                    Err(_) => match message.sender() {
+                        Ok(sender_name) => {
+                            let error_message = self.create_error_response(
+                                sender_name,
+                                &Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)),
+                                Some(message.header().conversation_id.clone()),
+                            )?;
+                            Ok(vec![JsonRpcOutcome::Response(error_message)])
+                        }
+                        Err(e) => {
+                            eprintln!("Error: Malformed sender name in message, cannot send error response: {:?}", e);
+                            Ok(vec![])
+                        }
+                    },
+                }
+            }
+            _ => {
+                // Invalid JSON-RPC message
+                match message.sender() {
+                    Ok(sender_name) => {
+                        let error_message = self.create_error_response(
+                            sender_name,
+                            &Error::JsonRpc(ErrorObject::from(ErrorCode::InvalidRequest)),
+                            Some(message.header().conversation_id.clone()),
+                        )?;
+                        Ok(vec![JsonRpcOutcome::Response(error_message)])
+                    }
+                    Err(e) => {
+                        eprintln!("Error: Malformed sender name in message, cannot send error response: {:?}", e);
+                        Ok(vec![])
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle a batch of JSON-RPC requests
+    fn handle_batch_request(
+        &mut self,
+        identity: Identity,
+        message: &MessageView,
+        requests: Vec<serde_json::Value>,
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        if requests.is_empty() {
+            // Per JSON-RPC 2.0 spec, an empty batch is an error
+            match message.sender() {
+                Ok(sender_name) => {
+                    let error_message = self.create_error_response(
+                        sender_name,
+                        &Error::JsonRpc(ErrorObject::from(ErrorCode::InvalidRequest)),
+                        Some(message.header().conversation_id.clone()),
+                    )?;
+                    return Ok(vec![JsonRpcOutcome::Response(error_message)]);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Error: Malformed sender name in message, cannot send error response: {:?}",
+                        e
+                    );
+                    return Ok(vec![]);
+                }
+            }
+        }
+
+        let sender = self.extract_sender(message)?;
+        let mut responses = Vec::new();
+        let mut all_outcomes = Vec::new(); // Collect all outcomes
+
+        // Process each request in the batch
+        for request_value in requests {
+            match request_value {
+                serde_json::Value::Object(_) => {
+                    // Convert the JSON value back to bytes and then parse as Request
+                    let request_bytes = serde_json::to_vec(&request_value)?;
+                    match serde_json::from_slice::<Request>(&request_bytes) {
+                        Ok(request) => {
+                            // Clone identity for each request since handle_request takes ownership
+                            let outcomes =
+                                self.handle_request(identity.clone(), message, request)?;
+
+                            for outcome in outcomes {
+                                match outcome {
+                                    JsonRpcOutcome::Response(response_message) => {
+                                        // Extract the JSON-RPC response from the message
+                                        if let Some(content_frame) =
+                                            response_message.content_frame()
+                                        {
+                                            if let Ok(response_value) =
+                                                serde_json::from_slice::<serde_json::Value>(
+                                                    content_frame,
+                                                )
+                                            {
+                                                responses.push(response_value);
+                                            }
+                                        }
+                                    }
+                                    JsonRpcOutcome::ResponseToIdentity(_)
+                                    | JsonRpcOutcome::Shutdown => {
+                                        // For coordinator sign-in responses or shutdown, add to outcomes directly
+                                        all_outcomes.push(outcome);
+                                    }
+                                    JsonRpcOutcome::NoAction => {
+                                        // Notifications don't have responses
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // Invalid request in batch - create an error response for it
+                            let error_response = Response::<()>::new(
+                                ResponsePayload::Error(ErrorObject::from(
+                                    ErrorCode::InvalidRequest,
+                                )),
+                                Id::Null,
+                            );
+                            if let Ok(error_value) = serde_json::to_value(&error_response) {
+                                responses.push(error_value);
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    // Non-object in batch - create an error response for it
+                    let error_response = Response::<()>::new(
+                        ResponsePayload::Error(ErrorObject::from(ErrorCode::InvalidRequest)),
+                        Id::Null,
+                    );
+                    if let Ok(error_value) = serde_json::to_value(&error_response) {
+                        responses.push(error_value);
+                    }
+                }
+            }
+        }
+
+        // If we have responses, create a batch response message
+        if !responses.is_empty() {
+            let batch_response = serde_json::to_vec(&responses)?;
+
+            let response_message = MessageBuilder::new()
+                .receiver(sender.clone())
+                .sender(self.name.clone())
+                .conversation_id(message.header().conversation_id.clone())
+                .message_type(MessageType::Json.into())
+                .payload_single(batch_response)
+                .build()?;
+
+            all_outcomes.insert(0, JsonRpcOutcome::Response(response_message.to_view()?));
+        } else if all_outcomes.is_empty() {
+            // No responses and no other outcomes means all were notifications
+            all_outcomes.push(JsonRpcOutcome::NoAction);
+        }
+
+        Ok(all_outcomes)
+    }
+
     /// Handle a JSON-RPC request.
     pub fn handle_request(
         &mut self,
         identity: Identity,
         message: &MessageView,
         request: Request,
-    ) -> Result<JsonRpcOutcome, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
         match request.method_name() {
             // Component methods
-            "pong" => self
-                .handle_pong(message, request.id)
-                .map(JsonRpcOutcome::Response),
+            "pong" => self.handle_pong(message, request.id),
             // Extended component
-            "shut_down" => self
-                .handle_shut_down(message, request.id())
-                .map(JsonRpcOutcome::Shutdown),
+            "shut_down" => self.handle_shut_down(message, request.id()),
             // Coordinator methods
-            "sign_in" => self
-                .handle_sign_in(identity, message, request.id())
-                .map(JsonRpcOutcome::Response),
-            "sign_out" => self
-                .handle_sign_out(identity, message, request.id())
-                .map(JsonRpcOutcome::Response),
-            "coordinator_sign_in" => self
-                .handle_coordinator_sign_in(identity, message, request.id())
-                .map(JsonRpcOutcome::ResponseToIdentity),
-            "coordinator_sign_out" => self
-                .handle_coordinator_sign_out(message, request.id())
-                .map(JsonRpcOutcome::Response),
-            "add_nodes" => self
-                .handle_add_nodes(message, request.id())
-                .map(JsonRpcOutcome::Response),
-            "send_nodes" => self
-                .handle_send_nodes(message, request.id())
-                .map(JsonRpcOutcome::Response),
-            "record_components" => self
-                .handle_record_components(message, request.id())
-                .map(JsonRpcOutcome::Response),
-            "send_local_components" => self
-                .handle_send_local_components(message, request.id())
-                .map(JsonRpcOutcome::Response),
-            "send_global_components" => self
-                .handle_send_global_components(message, request.id())
-                .map(JsonRpcOutcome::Response),
+            "sign_in" => self.handle_sign_in(identity, message, request.id()),
+            "sign_out" => self.handle_sign_out(identity, message, request.id()),
+            "coordinator_sign_in" => {
+                self.handle_coordinator_sign_in(identity, message, request.id())
+            }
+            "coordinator_sign_out" => self.handle_coordinator_sign_out(message, request.id()),
+            "add_nodes" => self.handle_add_nodes(message, request.id(), request.params()),
+            "send_nodes" => self.handle_send_nodes(message, request.id()),
+            "record_components" => self.handle_record_components(message, request.id()),
+            "send_local_components" => self.handle_send_local_components(message, request.id()),
+            "send_global_components" => self.handle_send_global_components(message, request.id()),
             _ => {
                 let sender = self.extract_sender(message)?;
                 let error_message = self.create_error_response(
@@ -93,7 +267,7 @@ impl<'a> JsonRpcHandler<'a> {
                     &Error::JsonRpc(ErrorObject::from(ErrorCode::MethodNotFound)),
                     Some(message.header().conversation_id.clone()),
                 )?;
-                Ok(JsonRpcOutcome::Response(error_message))
+                Ok(vec![JsonRpcOutcome::Response(error_message)])
             }
         }
     }
@@ -167,13 +341,23 @@ impl<'a> JsonRpcHandler<'a> {
         Ok(message.to_view()?)
     }
 
+    /// Create a null JSON-RPC response outcome
+    fn create_null_response_outcome(
+        &self,
+        message: &MessageView,
+        id: Id,
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        let response_message = self.create_null_response(message, id)?;
+        Ok(vec![JsonRpcOutcome::Response(response_message)])
+    }
+
     // Individual method handlers
     fn handle_pong(
         &self,
         message: &MessageView,
         id: Id,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        self.create_null_response(message, id)
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        self.create_null_response_outcome(message, id)
     }
 
     fn handle_sign_in(
@@ -181,10 +365,10 @@ impl<'a> JsonRpcHandler<'a> {
         identity: Identity,
         message: &MessageView,
         id: Id,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
         let sender = self.extract_sender(message)?;
         self.core.handle_sign_in(sender.clone(), identity)?;
-        self.create_null_response(message, id)
+        self.create_null_response_outcome(message, id)
     }
 
     fn handle_sign_out(
@@ -192,10 +376,10 @@ impl<'a> JsonRpcHandler<'a> {
         identity: Identity,
         message: &MessageView,
         id: Id,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
         let sender = self.extract_sender(message)?;
         self.core.handle_sign_out(identity, sender.clone())?;
-        self.create_null_response(message, id)
+        self.create_null_response_outcome(message, id)
     }
 
     /// Handle coordinator sign-in
@@ -204,86 +388,93 @@ impl<'a> JsonRpcHandler<'a> {
         identity: Identity,
         message: &MessageView,
         id: Id,
-    ) -> Result<(Identity, MessageView), Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
         // Extract sender (should be the coordinator signing in)
         let sender = self.extract_sender(message)?;
 
         // For coordinator sign-in, we expect the sender to be in format "namespace.COORDINATOR"
         if sender.name() != b"COORDINATOR" {
-            return self
-                .create_error_response(
-                    sender,
-                    &Error::JsonRpc(ErrorObject::owned(
-                        -32091, // Using duplicate name error code
-                        "Invalid coordinator sign-in request".to_string(),
-                        None::<()>,
-                    )),
-                    Some(message.header().conversation_id.clone()),
-                )
-                .map(|mess| (identity, mess));
+            let error_message = self.create_error_response(
+                sender,
+                &Error::duplicate_name(),
+                Some(message.header().conversation_id.clone()),
+            )?;
+
+            return Ok(vec![JsonRpcOutcome::ResponseToIdentity((
+                identity,
+                error_message,
+            ))]);
         };
 
-        // Return success response
-        let message = self.create_null_response(message, id);
-        let result = message.map(|mess| (identity, mess));
-        result
+        // Create success response
+        let response_message = self.create_null_response(message, id)?;
+
+        Ok(vec![JsonRpcOutcome::ResponseToIdentity((
+            identity,
+            response_message,
+        ))])
     }
 
     fn handle_coordinator_sign_out(
         &mut self,
         message: &MessageView,
         id: Id,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        self.create_null_response(message, id)
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        self.create_null_response_outcome(message, id)
     }
 
     fn handle_add_nodes(
         &mut self,
         message: &MessageView,
         id: Id,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        self.create_null_response(message, id)
+        params: Params,
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        self.create_null_response_outcome(message, id)
     }
 
     fn handle_send_nodes(
         &mut self,
         message: &MessageView,
         id: Id,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        self.create_null_response(message, id)
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        self.create_null_response_outcome(message, id)
     }
 
     fn handle_record_components(
         &mut self,
         message: &MessageView,
         id: Id,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        self.create_null_response(message, id)
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        self.create_null_response_outcome(message, id)
     }
 
     fn handle_send_local_components(
         &mut self,
         message: &MessageView,
         id: Id,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        self.create_null_response(message, id)
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        self.create_null_response_outcome(message, id)
     }
 
     fn handle_send_global_components(
         &mut self,
         message: &MessageView,
         id: Id,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        self.create_null_response(message, id)
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        self.create_null_response_outcome(message, id)
     }
 
     fn handle_shut_down(
         &mut self,
         message: &MessageView,
         id: Id,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        // Note: Shut down logic will be handled by the CoordinatorApp
-        // based on the JsonRpcOutcome::Shutdown variant.
-        self.create_null_response(message, id)
+    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        // Create the response message
+        let response_message = self.create_null_response(message, id)?;
+
+        Ok(vec![
+            JsonRpcOutcome::Response(response_message),
+            JsonRpcOutcome::Shutdown,
+        ])
     }
 }

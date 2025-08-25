@@ -6,8 +6,6 @@ use crate::core::ports::{
 };
 use crate::core::CoordinatorCore;
 use crate::jsonrpc_handler::{JsonRpcHandler, JsonRpcOutcome};
-use jsonrpsee_types::request::Request;
-use jsonrpsee_types::{ErrorCode, ErrorObject};
 use ruleco_core::errors::Error;
 use ruleco_core::full_name::FullName;
 use ruleco_core::message::MessageView;
@@ -148,40 +146,24 @@ where
             return Ok(());
         }
 
-        let request: Request = match serde_json::from_slice(content_frame) {
-            Ok(req) => req,
-            Err(_) => {
-                match message.sender() {
-                    Ok(sender_name) => {
-                        let error_message = handler.create_error_response(
-                            sender_name,
-                            &Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)),
-                            Some(message.header().conversation_id.clone()),
-                        )?;
-                        self.send_to_identity(identity, error_message)?;
-                    }
-                    Err(e) => {
-                        eprintln!("Error: Malformed sender name in message, cannot send error response: {:?}", e);
-                    }
-                }
-                return Ok(());
-            }
-        };
+        // Let the JSON-RPC handler deal with all the parsing details including batch requests
+        let outcomes = handler.handle_jsonrpc_message(identity, message, content_frame)?;
 
-        let outcome = handler.handle_request(identity, message, request)?;
-        match outcome {
-            JsonRpcOutcome::Response(response_message) => {
-                self.process_message(Identity::SELF, response_message)?;
-            }
-            JsonRpcOutcome::ResponseToIdentity((identity, response_message)) => {
-                self.send_to_identity(identity, response_message)?;
-            }
-            JsonRpcOutcome::Shutdown(response_message) => {
-                self.process_message(Identity::SELF, response_message)?;
-                self.running = false;
-            }
-            JsonRpcOutcome::NoAction => {
-                // No response to send
+        // Process all outcomes
+        for outcome in outcomes {
+            match outcome {
+                JsonRpcOutcome::Response(response_message) => {
+                    self.process_message(Identity::SELF, response_message)?;
+                }
+                JsonRpcOutcome::ResponseToIdentity((identity, response_message)) => {
+                    self.send_to_identity(identity, response_message)?;
+                }
+                JsonRpcOutcome::Shutdown => {
+                    self.running = false;
+                }
+                JsonRpcOutcome::NoAction => {
+                    // No response to send
+                }
             }
         }
 
