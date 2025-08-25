@@ -4,7 +4,7 @@ use crate::core::ports::{ClockPort, DirectoryPort, RoutingPort};
 use jsonrpsee_types::{ErrorCode, ErrorObject, Request};
 use ruleco_core::errors::Error;
 use ruleco_core::full_name::FullName;
-use ruleco_core::message::{ConversationId, MessageView};
+use ruleco_core::message::MessageView;
 
 /// The main coordinator core that implements the domain logic
 pub struct CoordinatorCore<D: DirectoryPort, C: ClockPort> {
@@ -122,7 +122,7 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
 }
 
 impl<D: DirectoryPort, C: ClockPort> RoutingPort for CoordinatorCore<D, C> {
-    /// Route a message based on its destination
+    /// Route a message based on its destination and the identity of its source
     fn route_message(&self, message: &MessageView, identity: &Identity) -> RoutingDecision {
         let sender = match message
             .try_sender(|_| Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)))

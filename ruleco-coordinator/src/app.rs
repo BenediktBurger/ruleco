@@ -85,14 +85,14 @@ where
         let messages = self.adapter.receive_messages(100)?;
 
         for (identity, received_message) in messages {
-            self.process_read_message(identity, received_message)?;
+            self.process_message(identity, received_message)?;
         }
 
         Ok(())
     }
 
-    /// Process a routed message with the given identity and source information
-    pub fn process_read_message(
+    /// Process a message with the given source identity
+    pub fn process_message(
         &mut self,
         identity: Identity,
         message: MessageView,
@@ -171,13 +171,13 @@ where
         let outcome = handler.handle_request(identity, message, request)?;
         match outcome {
             JsonRpcOutcome::Response(response_message) => {
-                self.process_read_message(Identity::SELF, response_message)?;
+                self.process_message(Identity::SELF, response_message)?;
             }
             JsonRpcOutcome::ResponseToIdentity((identity, response_message)) => {
                 self.send_to_identity(identity, response_message)?;
             }
             JsonRpcOutcome::Shutdown(response_message) => {
-                self.process_read_message(Identity::SELF, response_message)?;
+                self.process_message(Identity::SELF, response_message)?;
                 self.running = false;
             }
             JsonRpcOutcome::NoAction => {
@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_read_message_local_routing() {
+    fn test_process_message_local_routing() {
         let mut app = create_default_app();
 
         // Create a message from another component to the registered component
@@ -388,7 +388,7 @@ mod tests {
             .unwrap();
 
         // Process the message
-        let result = app.process_read_message(
+        let result = app.process_message(
             Identity::Local {
                 identity: COMPONENT1_IDENTITY.to_vec(),
             },
@@ -434,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_read_message_from_remote_to_local() {
+    fn test_process_message_from_remote_to_local() {
         let mut app = create_default_app();
         let message = MessageBuilder::new()
             .sender(
@@ -446,7 +446,7 @@ mod tests {
             .to_view()
             .unwrap();
 
-        let result = app.process_read_message(
+        let result = app.process_message(
             Identity::Remote {
                 identity: DEALER_IDENTITY.to_vec(),
             },
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     #[ignore] // not yet implemented, as there is no coordinator log in.
-    fn test_process_read_message_from_local_to_remote() {
+    fn test_process_message_from_local_to_remote() {
         let mut app = create_default_app();
         let message = MessageBuilder::new()
             .sender(component1_name())
@@ -475,7 +475,7 @@ mod tests {
             .to_view()
             .unwrap();
 
-        let result = app.process_read_message(
+        let result = app.process_message(
             Identity::Local {
                 identity: COMPONENT1_IDENTITY.to_vec(),
             },
@@ -491,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_read_message_coordinator_sign_in() {
+    fn test_process_message_coordinator_sign_in() {
         let mut app = create_default_app();
 
         // Create a coordinator sign-in message
@@ -511,7 +511,7 @@ mod tests {
 
         // Process the message
         let dealer_identity = vec![1, 2, 3, 4];
-        let result = app.process_read_message(
+        let result = app.process_message(
             Identity::Local {
                 identity: dealer_identity.clone(),
             },
@@ -582,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_read_message_self_target() {
+    fn test_process_message_self_target() {
         let mut app = create_default_app();
 
         // Create a message addressed to the coordinator itself
@@ -600,7 +600,7 @@ mod tests {
             .unwrap();
 
         // Process the message
-        let result = app.process_read_message(
+        let result = app.process_message(
             Identity::Local {
                 identity: sender_identity.clone(),
             },
