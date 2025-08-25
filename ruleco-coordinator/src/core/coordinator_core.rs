@@ -132,7 +132,7 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort for CoordinatorCore<D, C> {
                 return RoutingDecision::Error {
                     error,
                     conversation_id: Some(message.header().conversation_id.clone())
-                        .unwrap_or(ConversationId::default()),
+                        .unwrap_or_default(),
                 }
             }
         };
