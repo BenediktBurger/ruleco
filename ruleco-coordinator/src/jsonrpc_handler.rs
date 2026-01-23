@@ -494,3 +494,24 @@ impl<'a> JsonRpcHandler<'a> {
         ])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use ruleco_core::{
+        full_name::FullName, message::MessageBuilder, protocol_constants::MessageType,
+    };
+
+    #[test]
+    fn test_handle_add_node() {
+        let request_json = r#"{"jsonrpc": "2.0", "method": "add_nodes", "params": {"nodes": {"N1": "N1host:12300", "N2": "wrong_host:-7", "N3": "N3host:12300"}}, "id": 2}"#;
+        let _message = MessageBuilder::new()
+            .receiver(FullName::from_slice(b"test_ns.COORDINATOR").unwrap())
+            .sender(FullName::from_slice(b"some_sender").unwrap())
+            .message_type(MessageType::Json.into())
+            .payload_single(request_json.as_bytes().to_vec())
+            .build()
+            .unwrap()
+            .to_view()
+            .unwrap();
+    }
+}
