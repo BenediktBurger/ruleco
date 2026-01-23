@@ -144,11 +144,11 @@ impl MessageReceiverPort for MockAdapter {
 impl ConnectionManagementPort for MockAdapter {
     fn connect_to_coordinator(
         &mut self,
-        _dealer_identity: Vec<u8>,
         _address: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         // For testing, we don't actually connect to anything
-        Ok(())
+        // Return a dummy identity
+        Ok(vec![1,2,3,4])
     }
 
     fn disconnect_from_coordinator(

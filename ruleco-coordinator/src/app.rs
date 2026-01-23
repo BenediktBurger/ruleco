@@ -6,9 +6,10 @@ use crate::core::ports::{
 };
 use crate::core::CoordinatorCore;
 use crate::jsonrpc_handler::{JsonRpcHandler, JsonRpcOutcome};
+use jsonrpsee_types::Request;
 use ruleco_core::errors::Error;
 use ruleco_core::full_name::FullName;
-use ruleco_core::message::MessageView;
+use ruleco_core::message::{MessageBuilder, MessageView};
 use ruleco_core::protocol_constants::{self, MessageType};
 use std::time::Duration;
 
@@ -110,11 +111,67 @@ where
             RoutingDecision::SelfTarget => {
                 self.handle_self_message(identity, &message)?;
             }
+            RoutingDecision::PendingConnectionResponse { dealer_identity } => {
+                self.handle_remote_coordinator_response(dealer_identity, message)?;
+            }
             RoutingDecision::Error {
                 error,
                 conversation_id,
             } => {
                 self.send_error_response(identity, &message, &error, conversation_id)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle a response from a remote coordinator to our sign-in request
+    fn handle_remote_coordinator_response(
+        &mut self,
+        dealer_identity: Vec<u8>,
+        message: MessageView,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Try to extract the sender name from the message
+        let sender_name = match message.sender() {
+            Ok(name) => name,
+            Err(e) => {
+                eprintln!("Error extracting sender name from message: {:?}", e);
+                
+                // Even if we can't extract the sender name, we still need to clean up
+                // the pending connection, so treat this as an error response
+                if let Err(core_err) = self.core.handle_coordinator_sign_in_error(&dealer_identity) {
+                    eprintln!("Error handling coordinator sign-in error: {}", core_err);
+                }
+                
+                // Disconnect from the coordinator
+                if let Err(disconnect_err) = self.adapter.disconnect_from_coordinator(&dealer_identity) {
+                    eprintln!("Error disconnecting from coordinator: {}", disconnect_err);
+                }
+                
+                return Ok(());
+            }
+        };
+
+        // Check if this is an error response or a success response
+        if self.core.is_error_response(&message) {
+            // Handle error response
+            if let Err(e) = self.core.handle_coordinator_sign_in_error(&dealer_identity) {
+                eprintln!("Error handling coordinator sign-in error: {}", e);
+            }
+            
+            // Disconnect from the coordinator
+            if let Err(disconnect_err) = self.adapter.disconnect_from_coordinator(&dealer_identity) {
+                eprintln!("Error disconnecting from coordinator: {}", disconnect_err);
+            }
+        } else {
+            // Handle success response
+            if let Err(e) = self.core.handle_coordinator_sign_in_success(&dealer_identity, sender_name.clone()) {
+                eprintln!("Error handling coordinator sign-in success: {}", e);
+                
+                // Disconnect from the coordinator
+                if let Err(disconnect_err) = self.adapter.disconnect_from_coordinator(&dealer_identity) {
+                    eprintln!("Error disconnecting from coordinator: {}", disconnect_err);
+                }
             }
         }
 
@@ -127,9 +184,6 @@ where
         identity: Identity,
         message: &MessageView,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Create a handler instance for request handling and error response creation
-        let mut handler = JsonRpcHandler::new(&mut self.core, &self.name);
-
         let content_frame = match message.content_frame() {
             Some(frame) => frame,
             None => {
@@ -146,10 +200,16 @@ where
             return Ok(());
         }
 
-        // Let the JSON-RPC handler deal with all the parsing details including batch requests
-        let outcomes = handler.handle_jsonrpc_message(identity, message, content_frame)?;
-
         // Process all outcomes
+        let outcomes = {
+            // Create a handler instance for request handling and error response creation
+            // Scope the handler to release the borrow before processing outcomes
+            let mut handler = JsonRpcHandler::new(&mut self.core, &self.name);
+
+            // Let the JSON-RPC handler deal with all the parsing details including batch requests
+            handler.handle_jsonrpc_message(identity, message, content_frame)?
+        };
+
         for outcome in outcomes {
             match outcome {
                 JsonRpcOutcome::Response(response_message) => {
@@ -160,6 +220,11 @@ where
                 }
                 JsonRpcOutcome::Shutdown => {
                     self.running = false;
+                }
+                JsonRpcOutcome::AddNodes(addresses) => {
+                    for address in addresses {
+                        self.connect_to_remote_coordinator(address);
+                    }
                 }
                 JsonRpcOutcome::NoAction => {
                     // No response to send
@@ -190,24 +255,71 @@ where
         error: &Error,
         conversation_id: ruleco_core::message::ConversationId,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let handler = JsonRpcHandler::new(&mut self.core, &self.name);
-        match message.sender() {
-            Ok(name) => {
-                let error_message = handler.create_error_response(
-                    name, // Pass the FullName directly
-                    error,
-                    Some(conversation_id),
-                )?;
-                self.send_to_identity(identity, error_message)?;
+        let error_message = {
+            let handler = JsonRpcHandler::new(&mut self.core, &self.name);
+            match message.sender() {
+                Ok(name) => {
+                    handler.create_error_response(
+                        name, // Pass the FullName directly
+                        error,
+                        Some(conversation_id),
+                    )?
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Error: Malformed sender name in message, cannot send error response: {:?}",
+                        e
+                    );
+                    return Ok(());
+                }
             }
-            Err(e) => {
-                eprintln!(
-                    "Error: Malformed sender name in message, cannot send error response: {:?}",
-                    e
-                );
-            }
-        }
+        };
+
+        self.send_to_identity(identity, error_message)?;
         Ok(())
+    }
+
+    fn connect_to_remote_coordinator(&mut self, address: String) {
+        let dealer_identity = match self
+            .adapter
+            .connect_to_coordinator(&address)
+        {
+            Ok(dealer_identity) => dealer_identity,
+            Err(err) => {
+                eprintln!("{}", err);
+                return;
+            }
+        };
+        
+        // Store the address in pending connections until we get a response
+        self.core.add_pending_connection(dealer_identity.clone(), address);
+        
+        let request =
+            Request::borrowed("coordinator_sign_in", None, jsonrpsee_types::Id::Number(2));
+        let message = MessageBuilder::new()
+            .receiver(FullName::from_slice(b"COORDINATOR").unwrap())
+            .sender(self.name.clone())
+            .payload_json(&request)
+            .unwrap()
+            .build()
+            .unwrap()
+            .to_view()
+            .unwrap();
+        match self.adapter.send_to_remote(&dealer_identity, message) {
+            Ok(_) => (),
+            Err(err) => {
+                eprintln!("{}", err);
+                // Remove from pending connections on error
+                self.core.complete_pending_connection(&dealer_identity);
+                match self.adapter.disconnect_from_coordinator(&dealer_identity) {
+                    Ok(_) => (),
+                    Err(err) => {
+                        eprintln!("{}", err);
+                    }
+                };
+            }
+        };
+        // TODO add to directory
     }
 
     /// Check for timed out components

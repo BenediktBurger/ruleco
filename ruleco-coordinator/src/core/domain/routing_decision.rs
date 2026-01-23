@@ -15,6 +15,11 @@ pub enum RoutingDecision {
     },
     /// Handle the message internally (addressed to this coordinator)
     SelfTarget,
+    /// Handle a response from a remote coordinator we're connecting to
+    PendingConnectionResponse {
+        /// The ZMQ dealer identity of the remote coordinator
+        dealer_identity: Vec<u8>,
+    },
     /// Return an error to the sender
     Error {
         /// The error to send back

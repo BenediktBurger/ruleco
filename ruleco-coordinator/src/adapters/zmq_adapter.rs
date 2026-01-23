@@ -1,6 +1,6 @@
 use crate::core::ports::message_receiver_port::Identity;
 use crate::core::ports::{ConnectionManagementPort, MessageReceiverPort, MessageSenderPort};
-use ruleco_core::message::MessageView;
+use ruleco_core::message::{ConversationId, MessageView};
 use zmq;
 
 /// ZMQ implementation of the message sender and receiver ports
@@ -35,13 +35,13 @@ impl ZmqAdapter {
     /// Connect to a remote coordinator
     fn connect_to_coordinator_impl(
         &mut self,
-        dealer_identity: Vec<u8>,
         address: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let dealer_socket = self.context.socket(zmq::DEALER)?;
         dealer_socket.connect(address)?;
-        self.dealer_sockets.insert(dealer_identity, dealer_socket);
-        Ok(())
+        let dealer_identity = ConversationId::new().as_bytes().to_vec();
+        self.dealer_sockets.insert(dealer_identity.clone(), dealer_socket);
+        Ok(dealer_identity)
     }
 
     /// Disconnect from a remote coordinator
@@ -238,10 +238,9 @@ impl MessageReceiverPort for ZmqAdapter {
 impl ConnectionManagementPort for ZmqAdapter {
     fn connect_to_coordinator(
         &mut self,
-        dealer_identity: Vec<u8>,
         address: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.connect_to_coordinator_impl(dealer_identity, address)
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        self.connect_to_coordinator_impl(address)
     }
 
     fn disconnect_from_coordinator(

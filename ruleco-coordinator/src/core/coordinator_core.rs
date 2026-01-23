@@ -1,10 +1,13 @@
 use crate::core::domain::{ComponentEntry, CoordinatorEntry, RoutingDecision};
+use crate::core::parameter_types::AddNodesParams;
+use crate::core::pending_connections::PendingConnections;
 use crate::core::ports::message_receiver_port::Identity;
 use crate::core::ports::{ClockPort, DirectoryPort, RoutingPort};
 use jsonrpsee_types::{ErrorCode, ErrorObject, Request};
 use ruleco_core::errors::Error;
 use ruleco_core::full_name::FullName;
 use ruleco_core::message::MessageView;
+use serde_json::Value;
 
 /// The main coordinator core that implements the domain logic
 pub struct CoordinatorCore<D: DirectoryPort, C: ClockPort> {
@@ -14,6 +17,8 @@ pub struct CoordinatorCore<D: DirectoryPort, C: ClockPort> {
     directory: D,
     /// Clock port for time-related operations
     clock: C,
+    /// Track pending connections to remote coordinators
+    pending_connections: PendingConnections,
 }
 
 impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
@@ -23,7 +28,23 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
             namespace,
             directory,
             clock,
+            pending_connections: PendingConnections::new(),
         }
+    }
+
+    /// Add a pending connection to track
+    pub fn add_pending_connection(&mut self, dealer_identity: Vec<u8>, address: String) {
+        self.pending_connections.add_pending_connection(dealer_identity, address);
+    }
+
+    /// Complete a pending connection and return its information
+    pub fn complete_pending_connection(&mut self, dealer_identity: &[u8]) -> Option<crate::core::pending_connections::PendingConnectionInfo> {
+        self.pending_connections.complete_connection(dealer_identity)
+    }
+
+    /// Get information about a pending connection
+    pub fn get_pending_connection(&self, dealer_identity: &[u8]) -> Option<&crate::core::pending_connections::PendingConnectionInfo> {
+        self.pending_connections.get_pending_connection(dealer_identity)
     }
 
     /// Handle a component signing in
@@ -76,8 +97,25 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
     }
 
     // Coordinator_sign_in: Just respond with OK
+    pub fn handle_add_nodes(&self, nodes: AddNodesParams) -> Option<Vec<std::string::String>> {
+        let mut addresses = Vec::<String>::new();
+        for (ns, address) in nodes.nodes {
+            let stored_d = self.directory.get_coordinator(ns.as_bytes());
+            match stored_d {
+                None => {
+                    addresses.push(address);
+                }
+                Some(_) => (),
+            }
+        }
+        if addresses.is_empty() {
+            None
+        } else {
+            Some(addresses)
+        }
+    }
 
-    /// Check for timed out components
+    /// Check for timed out components and pending connections
     pub fn check_timeouts(&mut self, timeout_duration: std::time::Duration) -> Vec<FullName> {
         let now = self.clock.now();
         let mut timed_out_components = Vec::new();
@@ -94,12 +132,69 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
             let _ = self.directory.remove_local_component(name.clone());
         }
 
+        // Check for timed out pending connections (but don't do anything with them yet)
+        let _timed_out_connections = self.pending_connections.check_timeouts(timeout_duration);
+
         timed_out_components
     }
 
-    /// Add a coordinator to our network view
-    pub fn add_coordinator(&mut self, entry: CoordinatorEntry) -> Result<(), Error> {
-        self.directory.add_coordinator(entry)
+    /// Check if a message contains an error response
+    pub fn is_error_response(&self, message: &MessageView) -> bool {
+        if let Some(content_frame) = message.content_frame() {
+            if let Ok(response_value) = serde_json::from_slice::<Value>(content_frame) {
+                // Check if it's a JSON-RPC response with an error field
+                return response_value.get("error").is_some();
+            }
+        }
+        false
+    }
+
+    /// Handle a successful response to our coordinator sign-in request
+    /// 
+    /// This completes the pending connection and adds the coordinator to our directory
+    pub fn handle_coordinator_sign_in_success(
+        &mut self,
+        dealer_identity: &[u8],
+        remote_coordinator_name: FullName,
+    ) -> Result<(), Error> {
+        // Complete the pending connection to get the address
+        let pending_info = match self.complete_pending_connection(dealer_identity) {
+            Some(info) => info,
+            None => {
+                // This isn't a pending connection we initiated
+                return Err(Error::from(ErrorCode::InvalidParams));
+            }
+        };
+
+        // Create a coordinator entry
+        let coordinator_entry = CoordinatorEntry {
+            namespace: remote_coordinator_name.namespace().to_vec(),
+            dealer_identity: dealer_identity.to_vec(),
+            address: pending_info.address,
+        };
+
+        // Add to our directory
+        self.directory.add_coordinator(coordinator_entry)
+    }
+
+    /// Handle an error response to our coordinator sign-in request
+    /// 
+    /// This cleans up the pending connection without adding the coordinator to our directory
+    pub fn handle_coordinator_sign_in_error(
+        &mut self,
+        dealer_identity: &[u8],
+    ) -> Result<(), Error> {
+        // Complete the pending connection to clean it up
+        let _pending_info = match self.complete_pending_connection(dealer_identity) {
+            Some(info) => info,
+            None => {
+                // This isn't a pending connection we initiated
+                return Err(Error::from(ErrorCode::InvalidParams));
+            }
+        };
+
+        // No need to add to directory since the connection failed
+        Ok(())
     }
 
     /// Remove a coordinator from our network view
@@ -191,6 +286,15 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort for CoordinatorCore<D, C> {
         if receiver.name() == b"COORDINATOR"
             && (receiver.namespace() == &self.namespace[..] || receiver.namespace().is_empty())
         {
+            // Special case: If this is a response from a pending connection, handle it specially
+            if let Identity::Remote { identity: ref dealer_identity } = identity {
+                if self.get_pending_connection(dealer_identity).is_some() {
+                    return RoutingDecision::PendingConnectionResponse {
+                        dealer_identity: dealer_identity.clone(),
+                    };
+                }
+            }
+            
             return RoutingDecision::SelfTarget;
         }
 

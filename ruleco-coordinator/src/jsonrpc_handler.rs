@@ -1,4 +1,5 @@
 use crate::adapters::{InMemoryDirectoryAdapter, SystemClockAdapter};
+use crate::core::parameter_types::AddNodesParams;
 use crate::core::ports::message_receiver_port::Identity;
 use crate::core::CoordinatorCore;
 use jsonrpsee_types::request::Request;
@@ -20,6 +21,8 @@ pub enum JsonRpcOutcome {
     Response(MessageView),
     /// A response message should be sent, but to a specific identity.
     ResponseToIdentity((Identity, MessageView)),
+    /// Add new nodes.
+    AddNodes(Vec<String>),
     /// The coordinator should shut down.
     Shutdown,
     /// No specific action is required (e.g., for notifications).
@@ -164,7 +167,7 @@ impl<'a> JsonRpcHandler<'a> {
                             for outcome in outcomes {
                                 match outcome {
                                     JsonRpcOutcome::Response(response_message) => {
-                                        // Extract the JSON-RPC response from the message
+                                        // Combine the responses from all requests
                                         if let Some(content_frame) =
                                             response_message.content_frame()
                                         {
@@ -177,13 +180,11 @@ impl<'a> JsonRpcHandler<'a> {
                                             }
                                         }
                                     }
-                                    JsonRpcOutcome::ResponseToIdentity(_)
-                                    | JsonRpcOutcome::Shutdown => {
-                                        // For coordinator sign-in responses or shutdown, add to outcomes directly
-                                        all_outcomes.push(outcome);
-                                    }
                                     JsonRpcOutcome::NoAction => {
-                                        // Notifications don't have responses
+                                        // No action at all
+                                    }
+                                    _ => {
+                                        all_outcomes.push(outcome);
                                     }
                                 }
                             }
@@ -347,8 +348,12 @@ impl<'a> JsonRpcHandler<'a> {
         message: &MessageView,
         id: Id,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
-        let response_message = self.create_null_response(message, id)?;
-        Ok(vec![JsonRpcOutcome::Response(response_message)])
+        if id == Id::Null {
+            return Ok(Vec::<JsonRpcOutcome>::new());
+        } else {
+            let response_message = self.create_null_response(message, id)?;
+            Ok(vec![JsonRpcOutcome::Response(response_message)])
+        }
     }
 
     // Individual method handlers
@@ -429,7 +434,18 @@ impl<'a> JsonRpcHandler<'a> {
         id: Id,
         params: Params,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
-        self.create_null_response_outcome(message, id)
+        let nodes = params.parse::<AddNodesParams>()?;
+        let addresses = self.core.handle_add_nodes(nodes);
+        let response_outcome = self.create_null_response_outcome(message, id);
+        let mut outcomes = match response_outcome {
+            Ok(outcomes) => outcomes,
+            Err(..) => Vec::new(),
+        };
+        match addresses {
+            Some(addresses) => outcomes.push(JsonRpcOutcome::AddNodes(addresses)),
+            None => (),
+        };
+        Ok(outcomes)
     }
 
     fn handle_send_nodes(
