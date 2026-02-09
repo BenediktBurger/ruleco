@@ -27,20 +27,62 @@ impl InMemoryDirectoryAdapter {
 }
 
 impl DirectoryPort for InMemoryDirectoryAdapter {
-    fn add_local_component(&mut self, component: ComponentEntry) -> Result<(), Error> {
-        // Check if component name is already taken
-        if self.local_components.contains_key(&component.name) {
+    fn register_component(&mut self, name: FullName, identity: &[u8]) -> Result<(), Error> {
+        if self.local_components.contains_key(&name) {
             return Err(Error::duplicate_name());
         }
 
-        self.local_components
-            .insert(component.name.clone(), component);
+        self.local_components.insert(
+            name.clone(),
+            ComponentEntry {
+                name,
+                identity: identity.to_vec(),
+                last_seen: std::time::Instant::now(),
+            },
+        );
         Ok(())
     }
 
-    fn remove_local_component(&mut self, name: FullName) -> Result<Option<ComponentEntry>, Error> {
+    fn deregister_component(&mut self, name: FullName) -> Result<Option<ComponentEntry>, Error> {
         Ok(self.local_components.remove(&name))
     }
+
+    fn get_component_identity(&self, name: &FullName) -> Result<Vec<u8>, Error> {
+        match self.get_local_component(name) {
+            Some(entry) => Ok(entry.identity.clone()),
+            None => Err(Error::not_signed_in()),
+        }
+    }
+
+    fn is_component_registered(&self, name: &FullName) -> bool {
+        self.local_components.contains_key(name)
+    }
+
+    fn register_coordinator(&mut self, coordinator: CoordinatorEntry) -> Result<(), Error> {
+        self.coordinators
+            .insert(coordinator.namespace.clone(), coordinator);
+        Ok(())
+    }
+
+    fn deregister_coordinator(
+        &mut self,
+        namespace: &[u8],
+    ) -> Result<Option<CoordinatorEntry>, Error> {
+        Ok(self.coordinators.remove(namespace))
+    }
+
+    fn get_coordinator_dealer_identity(&self, namespace: &[u8]) -> Result<Vec<u8>, Error> {
+        match self.get_coordinator(namespace) {
+            Some(entry) => Ok(entry.dealer_identity.clone()),
+            None => Err(Error::node_unknown_with_data(serde_json::Value::Null)),
+        }
+    }
+
+    fn is_coordinator_registered(&self, namespace: &[u8]) -> bool {
+        self.coordinators.contains_key(namespace)
+    }
+
+    // Query methods
 
     fn get_local_component(&self, name: &FullName) -> Option<&ComponentEntry> {
         if name.has_namespace() {
@@ -49,6 +91,18 @@ impl DirectoryPort for InMemoryDirectoryAdapter {
             let full_name = FullName::new(self.namespace.clone(), name.name().to_vec());
             self.local_components.get(&full_name)
         }
+    }
+
+    fn get_coordinator(&self, namespace: &[u8]) -> Option<&CoordinatorEntry> {
+        self.coordinators.get(namespace)
+    }
+
+    fn get_all_local_components(&self) -> Vec<&ComponentEntry> {
+        self.local_components.values().collect()
+    }
+
+    fn get_all_coordinators(&self) -> Vec<&CoordinatorEntry> {
+        self.coordinators.values().collect()
     }
 
     fn update_component_last_seen(
@@ -62,27 +116,5 @@ impl DirectoryPort for InMemoryDirectoryAdapter {
         } else {
             Err(Error::not_signed_in())
         }
-    }
-
-    fn add_coordinator(&mut self, coordinator: CoordinatorEntry) -> Result<(), Error> {
-        self.coordinators
-            .insert(coordinator.namespace.clone(), coordinator);
-        Ok(())
-    }
-
-    fn remove_coordinator(&mut self, namespace: &[u8]) -> Result<Option<CoordinatorEntry>, Error> {
-        Ok(self.coordinators.remove(namespace))
-    }
-
-    fn get_coordinator(&self, namespace: &[u8]) -> Option<&CoordinatorEntry> {
-        self.coordinators.get(namespace)
-    }
-
-    fn get_all_local_components(&self) -> Vec<&ComponentEntry> {
-        self.local_components.values().collect()
-    }
-
-    fn get_all_coordinators(&self) -> Vec<&CoordinatorEntry> {
-        self.coordinators.values().collect()
     }
 }

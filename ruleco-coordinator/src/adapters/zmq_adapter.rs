@@ -1,9 +1,9 @@
-use crate::core::ports::message_receiver_port::Identity;
-use crate::core::ports::{ConnectionManagementPort, MessageReceiverPort, MessageSenderPort};
-use ruleco_core::message::{ConversationId, MessageView};
+use crate::core::ports::message_port::Identity;
+use crate::core::ports::{ConnectionManagementPort, MessagePort};
+use ruleco_core::message::ConversationId;
 use zmq;
 
-/// ZMQ implementation of the message sender and receiver ports
+/// ZMQ implementation of the message port and connection management port
 pub struct ZmqAdapter {
     /// The ZMQ context
     context: zmq::Context,
@@ -26,12 +26,6 @@ impl ZmqAdapter {
         })
     }
 
-    /// Bind the router socket to an address
-    fn bind_router_impl(&mut self, address: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.router_socket.bind(address)?;
-        Ok(())
-    }
-
     /// Connect to a remote coordinator
     fn connect_to_coordinator_impl(
         &mut self,
@@ -40,7 +34,8 @@ impl ZmqAdapter {
         let dealer_socket = self.context.socket(zmq::DEALER)?;
         dealer_socket.connect(address)?;
         let dealer_identity = ConversationId::new().as_bytes().to_vec();
-        self.dealer_sockets.insert(dealer_identity.clone(), dealer_socket);
+        self.dealer_sockets
+            .insert(dealer_identity.clone(), dealer_socket);
         Ok(dealer_identity)
     }
 
@@ -95,147 +90,127 @@ impl ZmqAdapter {
         Ok(readable_indices)
     }
 
+    /// Receive a message from a socket (ROUTER), returning the identity and frames
+    fn receive_frames_from_router(
+        &self,
+    ) -> Result<(Vec<u8>, Vec<Vec<u8>>), Box<dyn std::error::Error>> {
+        let identity = self.router_socket.recv_bytes(0)?;
+        let frames = self.router_socket.recv_multipart(0)?;
+        Ok((identity, frames))
+    }
+
+    /// Receive frames from a DEALER socket (no identity prefix)
+    fn receive_frames_from_dealer(
+        &self,
+        socket: &zmq::Socket,
+    ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+        let frames = socket.recv_multipart(0)?;
+        if frames.is_empty() {
+            return Err("Invalid message format: no parts".into());
+        }
+        Ok(frames)
+    }
+
     /// Receive all available messages within a timeout
-    fn receive_messages_impl(
+    ///
+    /// This polls all sockets (ROUTER and DEALERs) and returns all available messages.
+    fn receive_frames_all(
         &self,
         timeout_ms: u64,
-    ) -> Result<Vec<(Identity, MessageView)>, Box<dyn std::error::Error>> {
-        let mut messages: Vec<(Identity, MessageView)> = Vec::new();
+    ) -> Result<Vec<(Vec<u8>, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
+        let mut messages: Vec<(Vec<u8>, Vec<Vec<u8>>)> = Vec::new();
 
-        // Poll for messages with a timeout
         let readable_indices = self.poll_messages(timeout_ms as i64)?;
 
         if !readable_indices.is_empty() {
-            // Collect dealer identities first
             let dealer_identities: Vec<Vec<u8>> = self
                 .dealer_sockets_iter()
                 .map(|(identity, _)| identity.clone())
                 .collect();
 
-            // Process messages based on which sockets are readable
-            // Router socket is first in poll_items (index 0)
             if readable_indices.contains(&0) {
-                let (identity, message) = Self::receive_message_impl(&self.router_socket)?;
-                messages.push((Identity::Local { identity }, message));
+                let (identity, frames) = self.receive_frames_from_router()?;
+                messages.push((identity, frames));
             }
 
-            // Process dealer messages for readable sockets
-            // Dealer sockets start from index 1 in poll_items
             for &index in &readable_indices {
                 if index > 0 && index <= dealer_identities.len() {
                     let dealer_identity = &dealer_identities[index - 1];
-                    let message = Self::receive_message_from_dealer_impl(
-                        self.dealer_sockets.get(dealer_identity).unwrap(),
-                    )?;
-                    messages.push((
-                        Identity::Remote {
-                            identity: dealer_identity.clone(),
-                        },
-                        message,
-                    ));
+                    if let Some(socket) = self.dealer_sockets.get(dealer_identity) {
+                        let frames = self.receive_frames_from_dealer(socket)?;
+                        // For DEALER, we tag with the dealer identity for routing purposes
+                        messages.push((dealer_identity.clone(), frames));
+                    }
                 }
             }
         }
 
         Ok(messages)
     }
+}
 
-    /// Send a message to a local component
-    fn send_to_local_impl(
+impl MessagePort for ZmqAdapter {
+    fn send(
         &self,
-        identity: &[u8],
-        message: MessageView,
+        dest_identity: &Identity,
+        frames: Vec<Vec<u8>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.router_socket.send(identity, zmq::SNDMORE)?;
-        self.router_socket.send_multipart(message.raw_frames(), 0)?;
+        match dest_identity {
+            Identity::Component { identity } => {
+                self.router_socket.send(identity, zmq::SNDMORE)?;
+                self.router_socket.send_multipart(frames, 0)?;
+            }
+            Identity::Coordinator { identity } => {
+                if let Some(socket) = self.dealer_sockets.get(identity) {
+                    socket.send_multipart(frames, 0)?;
+                } else {
+                    return Err("Coordinator connection not found".into());
+                }
+            }
+            Identity::SelfTarget => {
+                return Err("Self-targeted messages should be handled internally".into());
+            }
+        }
         Ok(())
     }
 
-    /// Send a message to a remote coordinator
-    fn send_to_remote_impl(
-        &self,
-        dealer_identity: &[u8],
-        message: MessageView,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(socket) = self.dealer_sockets.get(dealer_identity) {
-            socket.send_multipart(message.raw_frames(), 0)?;
-            Ok(())
-        } else {
-            Err("Dealer socket not found".into())
-        }
-    }
+    fn recv(&self) -> Result<(Identity, Vec<Vec<u8>>), Box<dyn std::error::Error>> {
+        let poll_item = self.router_socket.as_poll_item(zmq::POLLIN);
 
-    /// Receive a message from a socket, returning the identity and message
-    fn receive_message_impl(
-        socket: &zmq::Socket,
-    ) -> Result<(Vec<u8>, MessageView), Box<dyn std::error::Error>> {
-        let identity = socket.recv_bytes(0)?;
-        let frames = socket.recv_multipart(0)?;
-        let message = MessageView::new(frames)?;
-
-        Ok((identity, message))
-    }
-
-    /// Receive a message from a dealer socket (no identity part)
-    fn receive_message_from_dealer_impl(
-        socket: &zmq::Socket,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        let frames = socket.recv_multipart(0)?;
-        if frames.is_empty() {
-            return Err("Invalid message format: no parts".into());
+        if zmq::poll(&mut [poll_item], -1)? > 0 {
+            let (identity, frames) = self.receive_frames_from_router()?;
+            return Ok((Identity::Component { identity }, frames));
         }
 
-        let message = MessageView::new(frames)?;
-
-        Ok(message)
-    }
-}
-
-impl MessageSenderPort for ZmqAdapter {
-    fn send_to_local(
-        &self,
-        identity: &[u8],
-        message: MessageView,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.send_to_local_impl(identity, message)
+        Err("No messages available".into())
     }
 
-    fn send_to_remote(
-        &self,
-        dealer_identity: &[u8],
-        message: MessageView,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.send_to_remote_impl(dealer_identity, message)
-    }
-}
-
-impl MessageReceiverPort for ZmqAdapter {
-    fn receive_message_from_local(
-        &self,
-    ) -> Result<(Vec<u8>, MessageView), Box<dyn std::error::Error>> {
-        Self::receive_message_impl(&self.router_socket)
-    }
-
-    fn receive_message_from_remote(
-        &self,
-        dealer_identity: &[u8],
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        let socket = self
-            .dealer_sockets
-            .get(dealer_identity)
-            .ok_or_else(|| -> Box<dyn std::error::Error> { "Dealer socket not found".into() })?;
-        Self::receive_message_from_dealer_impl(socket)
-    }
-
-    fn receive_messages(
+    fn recv_all(
         &self,
         timeout_ms: u64,
-    ) -> Result<Vec<(Identity, MessageView)>, Box<dyn std::error::Error>> {
-        self.receive_messages_impl(timeout_ms)
+    ) -> Result<Vec<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
+        let mut messages: Vec<(Identity, Vec<Vec<u8>>)> = Vec::new();
+        let raw_messages = self.receive_frames_all(timeout_ms)?;
+
+        for (identity, frames) in raw_messages {
+            let ident_enum = if self.dealer_sockets.contains_key(&identity) {
+                Identity::Coordinator { identity }
+            } else {
+                Identity::Component { identity }
+            };
+            messages.push((ident_enum, frames));
+        }
+
+        Ok(messages)
     }
 }
 
 impl ConnectionManagementPort for ZmqAdapter {
+    fn listen_for_components(&mut self, address: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.router_socket.bind(address)?;
+        Ok(())
+    }
+
     fn connect_to_coordinator(
         &mut self,
         address: &str,
@@ -245,12 +220,8 @@ impl ConnectionManagementPort for ZmqAdapter {
 
     fn disconnect_from_coordinator(
         &mut self,
-        dealer_identity: &[u8],
+        identity: &[u8],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.disconnect_from_coordinator_impl(dealer_identity)
-    }
-
-    fn bind_router(&mut self, address: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.bind_router_impl(address)
+        self.disconnect_from_coordinator_impl(identity)
     }
 }

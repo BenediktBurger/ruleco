@@ -1,9 +1,8 @@
 use crate::adapters::{InMemoryDirectoryAdapter, SystemClockAdapter, ZmqAdapter};
-use crate::core::domain::RoutingDecision;
-use crate::core::ports::message_receiver_port::Identity;
-use crate::core::ports::{
-    ConnectionManagementPort, MessageReceiverPort, MessageSenderPort, RoutingPort,
-};
+use crate::core::domain::RoutingError;
+use crate::core::ports::message_port::Identity;
+use crate::core::ports::routing_port::RoutingPort;
+use crate::core::ports::{ConnectionManagementPort, MessagePort};
 use crate::core::CoordinatorCore;
 use crate::jsonrpc_handler::{JsonRpcHandler, JsonRpcOutcome};
 use jsonrpsee_types::Request;
@@ -23,6 +22,8 @@ pub struct CoordinatorApp<T = ZmqAdapter> {
     name: FullName,
     /// Flag to indicate if the coordinator is running
     running: bool,
+    /// Track pending coordinator sign-in requests: dealer_identity -> address
+    pending_sign_ins: std::collections::HashMap<Vec<u8>, String>,
 }
 
 impl CoordinatorApp<ZmqAdapter> {
@@ -30,14 +31,14 @@ impl CoordinatorApp<ZmqAdapter> {
     pub fn new(namespace: &str, port: Option<u16>) -> Result<Self, Box<dyn std::error::Error>> {
         let port = port.unwrap_or(protocol_constants::DEFAULT_COORDINATOR_PORT);
         let mut zmq_adapter = ZmqAdapter::new()?;
-        zmq_adapter.bind_router(&format!("tcp://*:{}", &port))?;
+        zmq_adapter.listen_for_components(&format!("tcp://*:{}", &port))?;
         Self::new_with_adapter(namespace, zmq_adapter)
     }
 }
 
 impl<T> CoordinatorApp<T>
 where
-    T: MessageSenderPort + MessageReceiverPort + ConnectionManagementPort,
+    T: MessagePort + ConnectionManagementPort,
 {
     /// Create a new coordinator application with a specific adapter
     pub fn new_with_adapter(
@@ -57,6 +58,7 @@ where
             adapter,
             name,
             running: false,
+            pending_sign_ins: std::collections::HashMap::new(),
         })
     }
 
@@ -66,7 +68,7 @@ where
         println!("Coordinator started");
 
         while self.running {
-            self.check_timeouts();
+            let _ = self.core.check_timeouts(Duration::from_secs(10));
 
             // Poll for messages with a timeout
             if let Err(e) = self.poll_and_process_messages() {
@@ -80,174 +82,183 @@ where
 
     /// Poll for messages and process them
     fn poll_and_process_messages(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Receive all available messages with a timeout
-        let messages = self.adapter.receive_messages(100)?;
+        let messages = self.adapter.recv_all(100)?;
 
-        for (identity, received_message) in messages {
-            self.process_message(identity, received_message)?;
+        for (sender_identity, frames) in messages {
+            self.process_raw_message(sender_identity, frames)?;
         }
 
         Ok(())
     }
 
-    /// Process a message with the given source identity
-    pub fn process_message(
+/// Process raw frames received from the adapter
+    fn process_raw_message(
         &mut self,
-        identity: Identity,
-        message: MessageView,
+        sender_identity: Identity,
+        frames: Vec<Vec<u8>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let decision = self.core.route_message(&message, &identity);
-
-        match decision {
-            RoutingDecision::Local { target_identity } => {
-                self.adapter.send_to_local(&target_identity, message)?;
-            }
-            RoutingDecision::Remote {
-                target_dealer_identity,
-            } => {
-                self.adapter
-                    .send_to_remote(&target_dealer_identity, message)?;
-            }
-            RoutingDecision::SelfTarget => {
-                self.handle_self_message(identity, &message)?;
-            }
-            RoutingDecision::PendingConnectionResponse { dealer_identity } => {
-                self.handle_remote_coordinator_response(dealer_identity, message)?;
-            }
-            RoutingDecision::Error {
-                error,
-                conversation_id,
-            } => {
-                self.send_error_response(identity, &message, &error, conversation_id)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Handle a response from a remote coordinator to our sign-in request
-    fn handle_remote_coordinator_response(
-        &mut self,
-        dealer_identity: Vec<u8>,
-        message: MessageView,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // Try to extract the sender name from the message
-        let sender_name = match message.sender() {
-            Ok(name) => name,
+        let message = match MessageView::new(frames) {
+            Ok(msg) => msg,
             Err(e) => {
-                eprintln!("Error extracting sender name from message: {:?}", e);
-                
-                // Even if we can't extract the sender name, we still need to clean up
-                // the pending connection, so treat this as an error response
-                if let Err(core_err) = self.core.handle_coordinator_sign_in_error(&dealer_identity) {
-                    eprintln!("Error handling coordinator sign-in error: {}", core_err);
-                }
-                
-                // Disconnect from the coordinator
-                if let Err(disconnect_err) = self.adapter.disconnect_from_coordinator(&dealer_identity) {
-                    eprintln!("Error disconnecting from coordinator: {}", disconnect_err);
-                }
-                
+                eprintln!("Failed to parse message: {:?}", e);
                 return Ok(());
             }
         };
 
-        // Check if this is an error response or a success response
-        if self.core.is_error_response(&message) {
-            // Handle error response
-            if let Err(e) = self.core.handle_coordinator_sign_in_error(&dealer_identity) {
-                eprintln!("Error handling coordinator sign-in error: {}", e);
-            }
-            
-            // Disconnect from the coordinator
-            if let Err(disconnect_err) = self.adapter.disconnect_from_coordinator(&dealer_identity) {
-                eprintln!("Error disconnecting from coordinator: {}", disconnect_err);
-            }
-        } else {
-            // Handle success response
-            if let Err(e) = self.core.handle_coordinator_sign_in_success(&dealer_identity, sender_name.clone()) {
-                eprintln!("Error handling coordinator sign-in success: {}", e);
-                
-                // Disconnect from the coordinator
-                if let Err(disconnect_err) = self.adapter.disconnect_from_coordinator(&dealer_identity) {
-                    eprintln!("Error disconnecting from coordinator: {}", disconnect_err);
+        self.process_message(sender_identity, message)
+    }
+
+    /// Process a parsed message
+    fn process_message(
+        &mut self,
+        sender_identity: Identity,
+        message: MessageView,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let result = self.core.route_message(&message, &sender_identity);
+
+        match result {
+            Ok(target_identity) => {
+                match target_identity {
+                    Identity::SelfTarget => {
+                        self.handle_self_message(sender_identity, &message)?;
+                    }
+                    _ => {
+                        self.adapter.send(&target_identity, message.into_raw_frames())?;
+                    }
                 }
+            }
+            Err(RoutingError {
+                error,
+                conversation_id,
+            }) => {
+                self.send_error_response(sender_identity, &message, &error, conversation_id)?;
             }
         }
 
         Ok(())
     }
 
-    /// Unified method to handle messages addressed to this coordinator
+    /// Handle a coordinator sign-in request from another coordinator
+    fn handle_coordinator_sign_in_request(
+        &mut self,
+        sender_identity: Identity,
+        coordinator_name: FullName,
+        message: &MessageView,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let response = {
+            let handler = JsonRpcHandler::new(&mut self.core, &self.name);
+            handler.create_json_response(
+                &coordinator_name,
+                jsonrpsee_types::Id::Null,
+                serde_json::Value::Null,
+                Some(message.header().conversation_id.clone()),
+            )?
+        };
+        match &sender_identity {
+            Identity::SelfTarget => {
+                return Ok(());
+            }
+            _ => {
+                self.adapter.send(&sender_identity, response.into_raw_frames())?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Handle messages addressed to this coordinator
     fn handle_self_message(
         &mut self,
-        identity: Identity,
+        sender_identity: Identity,
         message: &MessageView,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let content_frame = match message.content_frame() {
             Some(frame) => frame,
-            None => {
-                // Just a heartbeat
+            None => return Ok(()),
+        };
+
+        if message.header().message_type_enum() != MessageType::Json {
+            return Ok(());
+        }
+
+        let sender_identity_bytes = match &sender_identity {
+            Identity::Component { identity } | Identity::Coordinator { identity } => {
+                identity.clone()
+            }
+            Identity::SelfTarget => {
+                eprintln!("Self-targeted message from SelfTarget?");
                 return Ok(());
             }
         };
 
-        if message.header().message_type_enum() != MessageType::Json {
-            eprintln!(
-                "Error: Message of unknown type {} received",
-                message.header().message_type_raw()
-            );
-            return Ok(());
+        if let Ok(sender_name) = message.sender() {
+            if self.core.is_coordinator_sign_in(message) {
+                return self.handle_coordinator_sign_in_request(
+                    sender_identity,
+                    sender_name.clone(),
+                    message,
+                );
+            }
+
+            if let Some(address) = self.pending_sign_ins.get(&sender_identity_bytes) {
+                if self.core.is_error_response(message) {
+                    eprintln!("Coordinator sign-in failed for {}", address);
+                    self.pending_sign_ins.remove(&sender_identity_bytes);
+                    let _ = self
+                        .adapter
+                        .disconnect_from_coordinator(&sender_identity_bytes);
+                    return Ok(());
+                }
+
+                if let Err(e) = self.core.handle_coordinator_sign_in_success(
+                    &sender_identity_bytes,
+                    sender_name.clone(),
+                    address.clone(),
+                ) {
+                    eprintln!("Error handling coordinator sign-in success: {}", e);
+                    self.pending_sign_ins.remove(&sender_identity_bytes);
+                    let _ = self
+                        .adapter
+                        .disconnect_from_coordinator(&sender_identity_bytes);
+                } else {
+                    self.pending_sign_ins.remove(&sender_identity_bytes);
+                }
+            }
         }
 
-        // Process all outcomes
         let outcomes = {
-            // Create a handler instance for request handling and error response creation
-            // Scope the handler to release the borrow before processing outcomes
             let mut handler = JsonRpcHandler::new(&mut self.core, &self.name);
-
-            // Let the JSON-RPC handler deal with all the parsing details including batch requests
-            handler.handle_jsonrpc_message(identity, message, content_frame)?
+            handler.handle_jsonrpc_message(sender_identity.clone(), message, content_frame)?
         };
 
         for outcome in outcomes {
             match outcome {
                 JsonRpcOutcome::Response(response_message) => {
-                    self.process_message(Identity::SELF, response_message)?;
+                    self.adapter.send(&sender_identity, response_message.into_raw_frames())?;
                 }
                 JsonRpcOutcome::ResponseToIdentity((identity, response_message)) => {
-                    self.send_to_identity(identity, response_message)?;
+                    let frames = response_message.into_raw_frames();
+                    match &identity {
+                        Identity::SelfTarget => {
+                            return Ok(());
+                        }
+                        _ => {
+                            self.adapter.send(&identity, frames)?;
+                        }
+                    }
                 }
-                JsonRpcOutcome::Shutdown => {
-                    self.running = false;
-                }
+                JsonRpcOutcome::Shutdown => self.running = false,
                 JsonRpcOutcome::AddNodes(addresses) => {
                     for address in addresses {
                         self.connect_to_remote_coordinator(address);
                     }
                 }
-                JsonRpcOutcome::NoAction => {
-                    // No response to send
-                }
+                JsonRpcOutcome::NoAction => {}
             }
         }
 
         Ok(())
     }
 
-    fn send_to_identity(
-        &self,
-        identity: Identity,
-        message: MessageView,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        match identity {
-            Identity::Remote { identity } => self.adapter.send_to_remote(&identity, message),
-            Identity::Local { identity } => self.adapter.send_to_local(&identity, message),
-            Identity::SELF => Ok(()), // log
-        }
-    }
-
-    /// Send an error response for a message
     fn send_error_response(
         &mut self,
         identity: Identity,
@@ -255,45 +266,43 @@ where
         error: &Error,
         conversation_id: ruleco_core::message::ConversationId,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        match &identity {
+            Identity::Component { .. } | Identity::Coordinator { .. } => {}
+            Identity::SelfTarget => {
+                eprintln!("Cannot send error to self");
+                return Ok(());
+            }
+        };
         let error_message = {
             let handler = JsonRpcHandler::new(&mut self.core, &self.name);
             match message.sender() {
-                Ok(name) => {
-                    handler.create_error_response(
-                        name, // Pass the FullName directly
-                        error,
-                        Some(conversation_id),
-                    )?
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Error: Malformed sender name in message, cannot send error response: {:?}",
-                        e
-                    );
-                    return Ok(());
-                }
+                Ok(name) => handler.create_error_response(name, error, Some(conversation_id))?,
+                Err(_) => return Ok(()),
             }
         };
-
-        self.send_to_identity(identity, error_message)?;
+        match &identity {
+            Identity::SelfTarget => {
+                return Ok(());
+            }
+            _ => {
+                self.adapter.send(&identity, error_message.into_raw_frames())?;
+            }
+        }
         Ok(())
     }
 
     fn connect_to_remote_coordinator(&mut self, address: String) {
-        let dealer_identity = match self
-            .adapter
-            .connect_to_coordinator(&address)
-        {
-            Ok(dealer_identity) => dealer_identity,
+        let dealer_identity = match self.adapter.connect_to_coordinator(&address) {
+            Ok(id) => id,
             Err(err) => {
                 eprintln!("{}", err);
                 return;
             }
         };
-        
-        // Store the address in pending connections until we get a response
-        self.core.add_pending_connection(dealer_identity.clone(), address);
-        
+
+        self.pending_sign_ins
+            .insert(dealer_identity.clone(), address.clone());
+
         let request =
             Request::borrowed("coordinator_sign_in", None, jsonrpsee_types::Id::Number(2));
         let message = MessageBuilder::new()
@@ -305,70 +314,20 @@ where
             .unwrap()
             .to_view()
             .unwrap();
-        match self.adapter.send_to_remote(&dealer_identity, message) {
-            Ok(_) => (),
-            Err(err) => {
-                eprintln!("{}", err);
-                // Remove from pending connections on error
-                self.core.complete_pending_connection(&dealer_identity);
-                match self.adapter.disconnect_from_coordinator(&dealer_identity) {
-                    Ok(_) => (),
-                    Err(err) => {
-                        eprintln!("{}", err);
-                    }
-                };
-            }
-        };
-        // TODO add to directory
+
+        let _ = self.adapter.send(
+            &Identity::Coordinator {
+                identity: dealer_identity,
+            },
+            message.into_raw_frames(),
+        );
     }
-
-    /// Check for timed out components
-    fn check_timeouts(&mut self) {
-        let timed_out_components = self.core.check_timeouts(Duration::from_secs(30));
-        for component_name in timed_out_components {
-            println!(
-                "Component {:?} timed out",
-                String::from_utf8_lossy(&component_name.to_vec())
-            );
-        }
-    }
-
-    /// Get a reference to the core for testing
-    #[cfg(test)]
-    pub fn core(&mut self) -> &mut CoordinatorCore<InMemoryDirectoryAdapter, SystemClockAdapter> {
-        &mut self.core
-    }
-}
-
-/// Trait for accessing sent messages in tests
-#[cfg(test)]
-pub trait TestableAdapter {
-    fn get_sent_to_local(&self) -> Vec<(Vec<u8>, MessageView)>;
-    fn get_sent_to_remote(&self) -> Vec<(Vec<u8>, MessageView)>;
-}
-
-#[cfg(test)]
-impl TestableAdapter for crate::adapters::MockAdapter {
-    fn get_sent_to_local(&self) -> Vec<(Vec<u8>, MessageView)> {
-        self.get_sent_to_local()
-    }
-
-    fn get_sent_to_remote(&self) -> Vec<(Vec<u8>, MessageView)> {
-        self.get_sent_to_remote()
-    }
-}
-
-// Implementation for ZMQ-specific functionality
-impl CoordinatorApp<ZmqAdapter> {
-    // This is intentionally left blank for now, but we could add ZMQ-specific methods here if needed
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::MockAdapter;
-    use ruleco_core::full_name::FullName;
-    use ruleco_core::message::MessageBuilder;
+    use crate::{adapters::MockAdapter};
 
     /// Helper function to format message frames for human-readable debug output
     fn format_message_frames(frames: &[Vec<u8>]) -> String {
@@ -383,6 +342,7 @@ mod tests {
             .join("\n")
     }
 
+    /// Assert that two messages are equal showing message content if they actually differ
     fn assert_messages_are_equal(sent_message: &MessageView, message: &MessageView) {
         if sent_message != message {
             panic!(
@@ -419,24 +379,12 @@ mod tests {
         let mut app = CoordinatorApp::new_with_adapter(NAMESPACE, mock_adapter)
             .expect("Failed to create CoordinatorApp");
 
-        // Register a local component in the directory
-
-        // Sign in the component
-        app.core()
-            .handle_sign_in(
-                component1_name(),
-                Identity::Local {
-                    identity: COMPONENT1_IDENTITY.to_vec(),
-                },
-            )
+        // Sign in the components
+        app.core
+            .handle_sign_in(component1_name(), COMPONENT1_IDENTITY)
             .expect("Failed to sign in component");
-        app.core()
-            .handle_sign_in(
-                component2_name(),
-                Identity::Local {
-                    identity: COMPONENT2_IDENTITY.to_vec(),
-                },
-            )
+        app.core
+            .handle_sign_in(component2_name(), COMPONENT2_IDENTITY)
             .expect("Failed to sign in component");
 
         app
@@ -463,7 +411,7 @@ mod tests {
             .unwrap();
 
         // Call handle_self_message and assert it returns Ok
-        let result = app.handle_self_message(Identity::Local { identity }, &message);
+        let result = app.handle_self_message(Identity::Component { identity }, &message);
         assert!(result.is_ok());
     }
 
@@ -483,9 +431,7 @@ mod tests {
 
         // Process the message
         let result = app.process_message(
-            Identity::Local {
-                identity: COMPONENT1_IDENTITY.to_vec(),
-            },
+            Identity::Component { identity: COMPONENT1_IDENTITY.to_vec() },
             message.clone(),
         );
         assert!(result.is_ok());
@@ -541,7 +487,7 @@ mod tests {
             .unwrap();
 
         let result = app.process_message(
-            Identity::Remote {
+            Identity::Coordinator {
                 identity: DEALER_IDENTITY.to_vec(),
             },
             message.clone(),
@@ -550,7 +496,7 @@ mod tests {
 
         let sent_messages = app.adapter.get_sent_to_local();
         assert_eq!(sent_messages.len(), 1);
-        assert_eq!(sent_messages[0].0, COMPONENT1_IDENTITY);
+        assert_eq!(sent_messages[0].0, COMPONENT1_IDENTITY.to_vec());
 
         assert_messages_are_equal(&sent_messages[0].1, &message);
     }
@@ -570,7 +516,7 @@ mod tests {
             .unwrap();
 
         let result = app.process_message(
-            Identity::Local {
+            Identity::Component {
                 identity: COMPONENT1_IDENTITY.to_vec(),
             },
             message.clone(),
@@ -579,7 +525,7 @@ mod tests {
 
         let sent_messages = app.adapter.get_sent_to_remote();
         assert_eq!(sent_messages.len(), 1);
-        assert_eq!(sent_messages[0].0, DEALER_IDENTITY);
+        assert_eq!(sent_messages[0].0, DEALER_IDENTITY.to_vec());
 
         assert_messages_are_equal(&sent_messages[0].1, &message);
     }
@@ -603,20 +549,27 @@ mod tests {
             .to_view()
             .unwrap();
 
-        // Process the message
+        // Sign in the coordinator to allow routing
         let dealer_identity = vec![1, 2, 3, 4];
+        app.core
+            .handle_sign_in(
+                FullName::new(b"remote_namespace2".to_vec(), b"COORDINATOR".to_vec()),
+                &dealer_identity,
+            )
+            .expect("Failed to sign in coordinator");
+
         let result = app.process_message(
-            Identity::Local {
+            Identity::Coordinator {
                 identity: dealer_identity.clone(),
             },
-            message.clone(),
+            message,
         );
         assert!(result.is_ok());
 
         // Verify a response was sent to the remote coordinator
-        let sent_messages = app.adapter.get_sent_to_local();
+        let sent_messages = app.adapter.get_sent_to_remote();
         assert_eq!(sent_messages.len(), 1);
-        assert_eq!(sent_messages[0].0, dealer_identity); // target dealer identity
+        assert_eq!(sent_messages[0].0, dealer_identity);
 
         // Verify the response is a JSON-RPC response with null result
         let response_message = &sent_messages[0].1;
@@ -666,7 +619,7 @@ mod tests {
             std::str::from_utf8(content_frame).expect("Content should be valid UTF-8");
 
         // Custom assertion with debug output
-        if !content_str.contains("\"result\":null") {
+        if !content_str.contains(r#""result":null"#) {
             panic!(
                 "Response content does not contain \"result\":null.\nActual content:\n{}\nMessage frames:\n{}",
                 content_str,
@@ -679,7 +632,6 @@ mod tests {
     fn test_process_message_self_target() {
         let mut app = create_default_app();
 
-        // Create a message addressed to the coordinator itself
         let sender_identity = COMPONENT1_IDENTITY.to_vec();
         let request_json = r#"{"jsonrpc":"2.0","method":"some_method","id":1}"#;
 
@@ -693,9 +645,8 @@ mod tests {
             .to_view()
             .unwrap();
 
-        // Process the message
         let result = app.process_message(
-            Identity::Local {
+            Identity::Component {
                 identity: sender_identity.clone(),
             },
             message.clone(),
@@ -705,7 +656,7 @@ mod tests {
         // Verify a method not found error response was sent
         let sent_messages = app.adapter.get_sent_to_local();
         assert_eq!(sent_messages.len(), 1);
-        assert_eq!(sent_messages[0].0, sender_identity); // target identity
+        assert_eq!(sent_messages[0].0, sender_identity);
 
         // Verify the response is a JSON-RPC error response
         let response_message = &sent_messages[0].1;
@@ -714,48 +665,13 @@ mod tests {
             ruleco_core::protocol_constants::MessageType::Json
         );
 
-        // Custom assertion with debug output using our helper function
-        if sent_messages.len() != 1 {
-            let formatted_messages: Vec<String> = sent_messages
-                .iter()
-                .map(|(identity, msg)| {
-                    format!(
-                        "Identity: {:?}\nFrames:\n{}",
-                        identity,
-                        format_message_frames(msg.raw_frames())
-                    )
-                })
-                .collect();
-
-            panic!(
-                "Expected 1 sent message, but got {}.\nSent messages:\n{}",
-                sent_messages.len(),
-                formatted_messages.join("\n---\n")
-            );
-        }
-
-        if sent_messages[0].0 != sender_identity {
-            panic!(
-                "Target identity mismatch.\nExpected: {:?}\nGot: {:?}\nMessage frames:\n{}",
-                sender_identity,
-                sent_messages[0].0,
-                format_message_frames(sent_messages[0].1.raw_frames())
-            );
-        }
-
-        let response_message = &sent_messages[0].1;
-        assert_eq!(
-            response_message.header().message_type_enum(),
-            ruleco_core::protocol_constants::MessageType::Json
-        );
         let content_frame = response_message
             .content_frame()
             .expect("Response should have content");
         let content_str =
             std::str::from_utf8(content_frame).expect("Content should be valid UTF-8");
 
-        // Custom assertions with debug output
-        if !content_str.contains("\"error\"") {
+        if !content_str.contains(r#""error""#) {
             panic!(
                 "Response content does not contain \"error\".\nActual content:\n{}\nMessage frames:\n{}",
                 content_str,
@@ -763,7 +679,7 @@ mod tests {
             );
         }
 
-        if !content_str.contains("\"code\":-32601") {
+        if !content_str.contains(r#""code":-32601"#) {
             panic!(
                 "Response content does not contain \"code\":-32601.\nActual content:\n{}\nMessage frames:\n{}",
                 content_str,

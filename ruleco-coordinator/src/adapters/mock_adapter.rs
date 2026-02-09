@@ -1,140 +1,175 @@
-use crate::core::ports::message_receiver_port::Identity;
-use crate::core::ports::{ConnectionManagementPort, MessageReceiverPort, MessageSenderPort};
+use crate::core::ports::{message_port::Identity, ConnectionManagementPort, MessagePort};
 use ruleco_core::message::MessageView;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-/// Mock implementation of message sender and receiver ports for testing
+/// Mock implementation of message port and connection management for testing
 pub struct MockAdapter {
-    /// Messages that would be sent to local components
-    pub sent_to_local: Rc<RefCell<Vec<(Vec<u8>, MessageView)>>>,
-    /// Messages that would be sent to remote coordinators
-    pub sent_to_remote: Rc<RefCell<Vec<(Vec<u8>, MessageView)>>>,
-    /// Messages to be received from local components (pre-populated for tests)
-    pub local_receive_queue: Rc<RefCell<VecDeque<(Vec<u8>, MessageView)>>>,
-    /// Messages to be received from remote coordinators (pre-populated for tests)
-    pub remote_receive_queue: Rc<RefCell<VecDeque<(Vec<u8>, MessageView)>>>,
+    /// All sent messages (Identity -> frames)
+    pub sent_messages: Rc<RefCell<Vec<(Identity, Vec<Vec<u8>>)>>>,
+    /// Messages to be received (pre-populated for tests)
+    pub receive_queue: Rc<RefCell<VecDeque<(Identity, Vec<Vec<u8>>)>>>,
+    /// Connected DEALER identities
+    pub connected_dealers: Rc<RefCell<Vec<Identity>>>,
+    /// Next dealer identity to return
+    next_dealer_identity: RefCell<usize>,
 }
 
 impl MockAdapter {
     /// Create a new mock adapter
     pub fn new() -> Self {
         Self {
-            sent_to_local: Rc::new(RefCell::new(Vec::new())),
-            sent_to_remote: Rc::new(RefCell::new(Vec::new())),
-            local_receive_queue: Rc::new(RefCell::new(VecDeque::new())),
-            remote_receive_queue: Rc::new(RefCell::new(VecDeque::new())),
+            sent_messages: Rc::new(RefCell::new(Vec::new())),
+            receive_queue: Rc::new(RefCell::new(VecDeque::new())),
+            connected_dealers: Rc::new(RefCell::new(Vec::new())),
+            next_dealer_identity: RefCell::new(1),
         }
     }
 
-    /// Add a message to be received from a local component
-    pub fn add_local_message(&self, identity: Vec<u8>, message: MessageView) {
-        self.local_receive_queue
-            .borrow_mut()
-            .push_back((identity, message));
+    /// Get a clone of sent messages
+    pub fn get_all_sent_messages(&self) -> Vec<(Identity, Vec<Vec<u8>>)> {
+        self.sent_messages
+            .borrow()
+            .iter()
+            .map(|(identity, frames)| (identity.clone(), frames.clone()))
+            .collect()
     }
 
-    /// Add a message to be received from a remote coordinator
-    pub fn add_remote_message(&self, dealer_identity: Vec<u8>, message: MessageView) {
-        self.remote_receive_queue
+    /// Get messages sent to local components (Identity::Component)
+    pub fn get_sent_to_local(&self) -> Vec<(Vec<u8>, MessageView)> {
+        self.sent_messages
+            .borrow()
+            .iter()
+            .filter_map(|(identity, frames)| {
+                if let Identity::Component { identity } = identity {
+                    if let Ok(view) = MessageView::new(frames.clone()) {
+                        Some((identity.clone(), view))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Get messages sent to remote coordinators (Identity::Coordinator)
+    pub fn get_sent_to_remote(&self) -> Vec<(Vec<u8>, MessageView)> {
+        self.sent_messages
+            .borrow()
+            .iter()
+            .filter_map(|(identity, frames)| {
+                if let Identity::Coordinator { identity } = identity {
+                    if let Ok(view) = MessageView::new(frames.clone()) {
+                        Some((identity.clone(), view))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Add a message to be received as Local (from ROUTER socket)
+    pub fn add_local_message_raw(&self, identity: Vec<u8>, frames: Vec<Vec<u8>>) {
+        self.receive_queue
             .borrow_mut()
-            .push_back((dealer_identity, message));
+            .push_back((Identity::Component { identity }, frames));
+    }
+
+    /// Add a message to be received as Remote (from DEALER socket)
+    pub fn add_remote_message_raw(&self, dealer_identity: Vec<u8>, frames: Vec<Vec<u8>>) {
+        self.receive_queue.borrow_mut().push_back((
+            Identity::Coordinator {
+                identity: dealer_identity,
+            },
+            frames,
+        ));
     }
 
     /// Clear all recorded sent messages
     pub fn clear_sent_messages(&self) {
-        self.sent_to_local.borrow_mut().clear();
-        self.sent_to_remote.borrow_mut().clear();
+        self.sent_messages.borrow_mut().clear();
     }
 
-    /// Get a clone of sent messages to local components
-    pub fn get_sent_to_local(&self) -> Vec<(Vec<u8>, MessageView)> {
-        self.sent_to_local
+    /// Check if dealer identity is connected
+    pub fn is_dealer_connected(&self, dealer_identity: &[u8]) -> bool {
+        self.connected_dealers
             .borrow()
             .iter()
-            .map(|(identity, message)| (identity.clone(), message.clone()))
-            .collect()
+            .any(|id| matches!(id, Identity::Coordinator { identity } if identity.as_slice() == dealer_identity))
     }
 
-    /// Get a clone of sent messages to remote coordinators
-    pub fn get_sent_to_remote(&self) -> Vec<(Vec<u8>, MessageView)> {
-        self.sent_to_remote
-            .borrow()
-            .iter()
-            .map(|(identity, message)| (identity.clone(), message.clone()))
-            .collect()
+    /// Get next dealer identity
+    fn next_dealer_identity(&self) -> Vec<u8> {
+        let mut next = self.next_dealer_identity.borrow_mut();
+        let identity = format!("dealer-{}", *next);
+        *next += 1;
+        identity.into_bytes()
+    }
+
+    /// Add a message to be received from a local component
+    pub fn add_local_message(&self, identity: Vec<u8>, message: MessageView) {
+        self.receive_queue.borrow_mut().push_back((
+            Identity::Component { identity },
+            message.raw_frames().to_vec(),
+        ));
+    }
+
+    /// Add a message to be received from a remote coordinator
+    pub fn add_remote_message(&self, dealer_identity: Vec<u8>, message: MessageView) {
+        self.receive_queue.borrow_mut().push_back((
+            Identity::Coordinator {
+                identity: dealer_identity,
+            },
+            message.raw_frames().to_vec(),
+        ));
     }
 }
 
-impl MessageSenderPort for MockAdapter {
-    fn send_to_local(
-        &self,
-        identity: &[u8],
-        message: MessageView,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.sent_to_local
-            .borrow_mut()
-            .push((identity.to_vec(), message.clone()));
-        Ok(())
-    }
-
-    fn send_to_remote(
-        &self,
-        dealer_identity: &[u8],
-        message: MessageView,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.sent_to_remote
-            .borrow_mut()
-            .push((dealer_identity.to_vec(), message.clone()));
-        Ok(())
+impl Default for MockAdapter {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-impl MessageReceiverPort for MockAdapter {
-    fn receive_message_from_local(
+impl MessagePort for MockAdapter {
+    fn send(
         &self,
-    ) -> Result<(Vec<u8>, MessageView), Box<dyn std::error::Error>> {
-        self.local_receive_queue
+        dest_identity: &Identity,
+        frames: Vec<Vec<u8>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        match dest_identity {
+            Identity::SelfTarget => {
+                return Err("send_to_self not implemented for MockAdapter".into());
+            }
+            _ => {
+                self.sent_messages.borrow_mut().push((dest_identity.clone(), frames));
+            }
+        }
+        Ok(())
+    }
+
+    fn recv(&self) -> Result<(Identity, Vec<Vec<u8>>), Box<dyn std::error::Error>> {
+        self.receive_queue
             .borrow_mut()
             .pop_front()
-            .ok_or_else(|| "No messages in local receive queue".into())
+            .ok_or_else(|| Box::<dyn std::error::Error>::from("No messages in receive queue"))
     }
 
-    fn receive_message_from_remote(
-        &self,
-        dealer_identity: &[u8],
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
-        // Find a message for this dealer identity
-        let mut queue = self.remote_receive_queue.borrow_mut();
-        let position = queue
-            .iter()
-            .position(|(id, _)| id == dealer_identity)
-            .ok_or_else(|| "No messages in remote receive queue for this dealer")?;
-
-        Ok(queue.remove(position).unwrap().1)
-    }
-
-    fn receive_messages(
+    fn recv_all(
         &self,
         _timeout_ms: u64,
-    ) -> Result<Vec<(Identity, MessageView)>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
         let mut messages = Vec::new();
+        let mut queue = self.receive_queue.borrow_mut();
 
-        // Process all local messages
-        while let Some((identity, message)) = self.local_receive_queue.borrow_mut().pop_front() {
-            messages.push((Identity::Local { identity }, message));
-        }
-
-        // Process all remote messages
-        let mut remote_queue = self.remote_receive_queue.borrow_mut();
-        while let Some((dealer_identity, message)) = remote_queue.pop_front() {
-            messages.push((
-                Identity::Remote {
-                    identity: dealer_identity,
-                },
-                message,
-            ));
+        while let Some((identity, frames)) = queue.pop_front() {
+            messages.push((identity, frames));
         }
 
         Ok(messages)
@@ -142,25 +177,30 @@ impl MessageReceiverPort for MockAdapter {
 }
 
 impl ConnectionManagementPort for MockAdapter {
+    fn listen_for_components(&mut self, _address: &str) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+
     fn connect_to_coordinator(
         &mut self,
         _address: &str,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        // For testing, we don't actually connect to anything
-        // Return a dummy identity
-        Ok(vec![1,2,3,4])
+        let identity = self.next_dealer_identity();
+        self.connected_dealers
+            .borrow_mut()
+            .push(Identity::Coordinator {
+                identity: identity.clone(),
+            });
+        Ok(identity)
     }
 
     fn disconnect_from_coordinator(
         &mut self,
-        _dealer_identity: &[u8],
+        dealer_identity: &[u8],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // For testing, we don't actually disconnect from anything
-        Ok(())
-    }
-
-    fn bind_router(&mut self, _address: &str) -> Result<(), Box<dyn std::error::Error>> {
-        // For testing, we don't actually bind to anything
+        self.connected_dealers.borrow_mut().retain(|id| {
+            !matches!(id, Identity::Coordinator { identity } if identity.as_slice() == dealer_identity)
+        });
         Ok(())
     }
 }

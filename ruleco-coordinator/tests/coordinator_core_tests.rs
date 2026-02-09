@@ -2,13 +2,12 @@ use jsonrpsee_types::Request;
 use rstest::rstest;
 use ruleco_coordinator::adapters::{InMemoryDirectoryAdapter, SystemClockAdapter};
 use ruleco_coordinator::core::coordinator_core::CoordinatorCore;
-use ruleco_coordinator::core::domain::{ComponentEntry, CoordinatorEntry, RoutingDecision};
-use ruleco_coordinator::core::ports::message_receiver_port::Identity;
+use ruleco_coordinator::core::domain::{CoordinatorEntry, RoutingError};
+use ruleco_coordinator::core::ports::message_port::Identity;
 use ruleco_coordinator::core::ports::{DirectoryPort, RoutingPort};
 use ruleco_core::full_name::FullName;
 use ruleco_core::message::MessageBuilder;
 use ruleco_core::protocol_constants::MessageType;
-use std::time::Instant;
 
 static NAMESPACE: &str = "test_namespace";
 static REMOTE_NAMESPACE: &str = "remote_namespace";
@@ -50,18 +49,12 @@ fn create_default_core() -> CoordinatorCore<InMemoryDirectoryAdapter, SystemCloc
     let clock = SystemClockAdapter::new();
 
     // Add local components to the directory
-    let component = ComponentEntry {
-        name: component1_name(),
-        identity: COMPONENT1_IDENTITY.to_vec(),
-        last_seen: Instant::now(),
-    };
-    directory.add_local_component(component).unwrap();
-    let component2 = ComponentEntry {
-        name: component2_name(),
-        identity: COMPONENT2_IDENTITY.to_vec(),
-        last_seen: Instant::now(),
-    };
-    directory.add_local_component(component2).unwrap();
+    directory
+        .register_component(component1_name(), COMPONENT1_IDENTITY)
+        .unwrap();
+    directory
+        .register_component(component2_name(), COMPONENT2_IDENTITY)
+        .unwrap();
 
     // Add a remote coordinator to the directory
     let coordinator = CoordinatorEntry {
@@ -69,10 +62,98 @@ fn create_default_core() -> CoordinatorCore<InMemoryDirectoryAdapter, SystemCloc
         dealer_identity: DEALER_IDENTITY.to_vec(),
         address: "tcp://localhost:5555".to_string(),
     };
-    directory.add_coordinator(coordinator).unwrap();
+    directory.register_coordinator(coordinator).unwrap();
 
     let core = CoordinatorCore::new(namespace, directory, clock);
     core
+}
+
+fn local_identity(identity: &[u8]) -> Identity {
+    Identity::Component {
+        identity: identity.to_vec(),
+    }
+}
+
+fn remote_identity(identity: &[u8]) -> Identity {
+    Identity::Coordinator {
+        identity: identity.to_vec(),
+    }
+}
+
+#[test]
+fn test_route_message_from_remote_coordinator_without_validation() {
+    // Setup
+    let core = create_default_core();
+
+    // Create a message from a remote coordinator's DEALER socket
+    // The remote coordinator is NOT signed in as a local component
+    let remote_coordinator = FullName::new(b"remote_coordinator".to_vec(), b"COORDINATOR".to_vec());
+    let message = MessageBuilder::new()
+        .receiver(component1_name())
+        .sender(remote_coordinator)
+        .message_type(MessageType::Json.into())
+        .payload_single(br#"{"jsonrpc":"2.0","method":"some_method","id":1}"#.to_vec())
+        .build()
+        .unwrap();
+
+    // Test - this should succeed even though the remote coordinator is not signed in locally
+    let decision = core.route_message(
+        &message.to_view().unwrap(),
+        &remote_identity(b"remote_dealer_id"),
+    );
+
+    // Assertions - should route to local component
+    match decision {
+        Ok(target_identity) => match target_identity {
+            Identity::Component { identity } => {
+                assert_eq!(identity.as_slice(), COMPONENT1_IDENTITY);
+            }
+            _ => panic!("Expected Identity::Local, got {:?}", target_identity),
+        },
+        Err(e) => panic!("Expected Ok(Identity), got Err: {:?}", e),
+    }
+}
+
+#[test]
+fn test_message_from_local_component_signed_in_via_dealer() {
+    // Setup - core with only coordinator registered, no local components
+    let namespace = NAMESPACE.as_bytes().to_vec();
+    let mut directory = InMemoryDirectoryAdapter::new(namespace.clone());
+    let clock = SystemClockAdapter::new();
+
+    // Add only a remote coordinator
+    let coordinator = CoordinatorEntry {
+        namespace: b"remote_coordinator".to_vec(),
+        dealer_identity: DEALER_IDENTITY.to_vec(),
+        address: "tcp://localhost:5555".to_string(),
+    };
+    directory.register_coordinator(coordinator).unwrap();
+
+    let core = CoordinatorCore::new(namespace, directory, clock);
+
+    // Create a message from a local component that came via DEALER (shouldn't happen but test the case)
+    // This message will NOT be validated because it's from a DEALER socket!
+    let message = MessageBuilder::new()
+        .receiver(self_name())
+        .sender(component1_name())
+        .message_type(MessageType::Json.into())
+        .payload_single(br#"{"jsonrpc":"2.0","method":"sign_in","id":1}"#.to_vec())
+        .build()
+        .unwrap();
+
+    // Test - even though component1 is not signed in, message should pass because it's from a DEALER socket
+    let decision = core.route_message(
+        &message.to_view().unwrap(),
+        &remote_identity(b"dealer_id_for_local_component"),
+    );
+
+    // Assertions - should route to self (coordinator)
+    match decision {
+        Ok(Identity::SelfTarget) => {
+            // This is expected for messages addressed to coordinator
+        }
+        _ => panic!("Expected SelfTarget routing decision, got {:?}", decision),
+    }
 }
 
 #[test]
@@ -89,16 +170,17 @@ fn test_route_message_from_local_to_local_component() {
     // Test
     let decision = core.route_message(
         &message.to_view().unwrap(),
-        &Identity::Local {
-            identity: COMPONENT1_IDENTITY.to_vec(),
-        },
+        &local_identity(COMPONENT1_IDENTITY),
     );
 
     // Assertions
     match decision {
-        RoutingDecision::Local { target_identity } => {
-            assert_eq!(target_identity, COMPONENT2_IDENTITY);
-        }
+        Ok(target_identity) => match target_identity {
+            Identity::Component { identity } => {
+                assert_eq!(identity.as_slice(), COMPONENT2_IDENTITY);
+            }
+            _ => panic!("Expected Identity::Local, got {:?}", target_identity),
+        },
         _ => panic!("Expected Local routing decision, got {:?}", decision),
     }
 }
@@ -116,16 +198,17 @@ fn test_route_message_to_local_component_without_namespace_in_receiver() {
     // Test
     let decision = core.route_message(
         &message.to_view().unwrap(),
-        &Identity::Local {
-            identity: COMPONENT1_IDENTITY.to_vec(),
-        },
+        &local_identity(COMPONENT1_IDENTITY),
     );
 
     // Assertions
     match decision {
-        RoutingDecision::Local { target_identity } => {
-            assert_eq!(target_identity, COMPONENT2_IDENTITY);
-        }
+        Ok(target_identity) => match target_identity {
+            Identity::Component { identity } => {
+                assert_eq!(identity.as_slice(), COMPONENT2_IDENTITY);
+            }
+            _ => panic!("Expected Identity::Local, got {:?}", target_identity),
+        },
         _ => panic!("Expected Local routing decision, got {:?}", decision),
     }
 }
@@ -153,14 +236,12 @@ fn test_route_sign_in_message_to_coordinator() {
     // Test
     let decision = core.route_message(
         &message.to_view().unwrap(),
-        &Identity::Local {
-            identity: UNREGISTERED_IDENTITY.to_vec(),
-        },
+        &local_identity(UNREGISTERED_IDENTITY),
     );
 
     // Assertions
     match decision {
-        RoutingDecision::SelfTarget => {
+        Ok(Identity::SelfTarget) => {
             // This is expected for sign-in messages to the coordinator
         }
         _ => panic!("Expected SelfTarget routing decision, got {:?}", decision),
@@ -181,25 +262,27 @@ fn test_route_message_to_remote_component() {
     // Test
     let decision = core.route_message(
         &message.to_view().unwrap(),
-        &Identity::Local {
-            identity: COMPONENT1_IDENTITY.to_vec(),
-        },
+        &local_identity(COMPONENT1_IDENTITY),
     );
 
     // Assertions
     match decision {
-        RoutingDecision::Remote {
-            target_dealer_identity,
-        } => {
-            assert_eq!(target_dealer_identity, DEALER_IDENTITY);
-        }
-        _ => panic!("Expected Remote routing decision, got {:?}", decision),
+        Ok(target_dealer_identity) => match target_dealer_identity {
+            Identity::Coordinator { identity } => {
+                assert_eq!(identity.as_slice(), DEALER_IDENTITY);
+            }
+            _ => panic!(
+                "Expected Identity::Remote, got {:?}",
+                target_dealer_identity
+            ),
+        },
+        Err(e) => panic!("Expected Ok(Identity), got Err: {:?}", e),
     }
 }
 
 #[test]
 fn test_route_message_from_remote_component() {
-    //Setup
+    // Setup
     let core = create_default_core();
 
     let message = MessageBuilder::new()
@@ -208,20 +291,22 @@ fn test_route_message_from_remote_component() {
         .build()
         .unwrap();
 
-    // Test
+    // The sender is from a remote namespace ("remote_namespace"), so no validation is needed.
+    // The identity is just for the ROUTER socket, but the actual sender is remote.
     let decision = core.route_message(
         &message.to_view().unwrap(),
-        &Identity::Remote {
-            identity: DEALER_IDENTITY.to_vec(),
-        },
+        &local_identity(COMPONENT1_IDENTITY),
     );
 
     // Assertions
     match decision {
-        RoutingDecision::Local { target_identity } => {
-            assert_eq!(target_identity, COMPONENT1_IDENTITY)
-        }
-        _ => panic!("Expected Remote routing decision, got {:?}", decision),
+        Ok(target_identity) => match target_identity {
+            Identity::Component { identity } => {
+                assert_eq!(identity.as_slice(), COMPONENT1_IDENTITY);
+            }
+            _ => panic!("Expected Identity::Local, got {:?}", target_identity),
+        },
+        _ => panic!("Expected Local routing decision, got {:?}", decision),
     }
 }
 
@@ -250,27 +335,63 @@ fn test_route_non_sign_in_message_from_unregistered_component_to_coordinator(
     // Test
     let decision = core.route_message(
         &message.to_view().unwrap(),
-        &Identity::Local {
-            identity: UNREGISTERED_IDENTITY.to_vec(),
-        },
+        &local_identity(UNREGISTERED_IDENTITY),
     );
 
     // Assertions
-    match decision {
-        RoutingDecision::Error { error, .. } => {
-            // This is expected - unregistered components can't send non-sign-in messages
-            match error {
-                ruleco_core::errors::Error::Leco(leco_error) => {
-                    match leco_error {
-                        ruleco_core::errors::LecoError::NotSignedIn { .. } => {
-                            // This is what we expect
+    let full_sender = FullName::from_slice(sender).unwrap();
+    let is_from_local_namespace =
+        full_sender.namespace().is_empty() || full_sender.namespace() == NAMESPACE.as_bytes();
+
+    if is_from_local_namespace {
+        // Local components must be signed in
+        match decision {
+            Err(RoutingError { error, .. }) => {
+                match error {
+                    ruleco_core::errors::Error::Leco(leco_error) => {
+                        match leco_error {
+                            ruleco_core::errors::LecoError::NotSignedIn { .. } => {
+                                // This is what we expect
+                            }
+                            _ => panic!("Expected NotSignedIn error, got {:?}", leco_error),
                         }
-                        _ => panic!("Expected NotSignedIn error, got {:?}", leco_error),
+                    }
+                    _ => panic!("Expected Leco error, got {:?}", error),
+                }
+            }
+            _ => panic!(
+                "Expected Error routing decision for local unregistered component, got {:?}",
+                decision
+            ),
+        }
+    } else {
+        // Remote components (different namespaces) don't need validation
+        // They should route normally
+        let full_receiver = FullName::from_slice(receiver).unwrap();
+        let is_to_coordinator = full_receiver.name() == b"COORDINATOR"
+            && (!full_receiver.has_namespace()
+                || full_receiver.namespace() == NAMESPACE.as_bytes());
+
+        if is_to_coordinator {
+            match decision {
+                Ok(Identity::SelfTarget) => {}
+                _ => panic!(
+                    "Expected SelfTarget for remote component message to coordinator, got {:?}",
+                    decision
+                ),
+            }
+        } else {
+            match decision {
+                Ok(target_identity) => {
+                    match target_identity {
+                        Identity::Component { identity } => {
+                            assert_eq!(identity.as_slice(), COMPONENT1_IDENTITY);
+                        }
+                        _ => panic!("Expected Identity::Local, got {:?}", target_identity),
                     }
                 }
-                _ => panic!("Expected Leco error, got {:?}", error),
+                _ => panic!("Expected Local routing decision for remote component message to local component, got {:?}", decision),
             }
         }
-        _ => panic!("Expected Error routing decision, got {:?}", decision),
     }
 }

@@ -1,28 +1,36 @@
 /// Interface for connection management operations
 pub trait ConnectionManagementPort {
-    /// Create a connection to a remote coordinator
+    /// Start listening for component connections
+    ///
+    /// Binds to an address to accept connections from local components.
+    /// The specific transport mechanism is abstracted away.
     ///
     /// # Parameters
-    /// * `remote_address` - The address of the remote coordinator
+    /// * `address` - Address to listen on (e.g., "tcp://*:12300")
+    fn listen_for_components(&mut self, address: &str) -> Result<(), Box<dyn std::error::Error>>;
+
+    /// Connect to a remote coordinator
+    ///
+    /// Establishes a connection to another coordinator's listening address.
+    ///
+    /// # Parameters
+    /// * `address` - Address of the remote coordinator's listening endpoint
+    ///
     /// # Returns
-    /// The identity to use for the dealer connection
+    /// The connection identity for this remote coordinator
     fn connect_to_coordinator(
         &mut self,
-        remote_address: &str,
+        address: &str,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error>>;
 
     /// Disconnect from a remote coordinator
     ///
-    /// # Parameters
-    /// * `dealer_identity` - The identity of the dealer connection to remove
-    fn disconnect_from_coordinator(
-        &mut self,
-        dealer_identity: &[u8],
-    ) -> Result<(), Box<dyn std::error::Error>>;
-
-    /// Bind the router socket to an address
+    /// Closes the connection to a remote coordinator.
     ///
     /// # Parameters
-    /// * `address` - The address to bind the router socket to
-    fn bind_router(&mut self, address: &str) -> Result<(), Box<dyn std::error::Error>>;
+    /// * `identity` - The connection identity of the remote coordinator to disconnect
+    fn disconnect_from_coordinator(
+        &mut self,
+        identity: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>>;
 }

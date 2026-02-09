@@ -194,6 +194,11 @@ impl MessageView {
         &self.frames
     }
 
+    /// Consume and extract raw frames for zero-copy forwarding
+    pub fn into_raw_frames(self) -> Vec<Vec<u8>> {
+        self.frames
+    }
+
     // Accessor methods
     pub fn version(&self) -> u8 {
         self.version

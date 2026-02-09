@@ -1,6 +1,6 @@
 use crate::adapters::{InMemoryDirectoryAdapter, SystemClockAdapter};
 use crate::core::parameter_types::AddNodesParams;
-use crate::core::ports::message_receiver_port::Identity;
+use crate::core::ports::message_port::Identity;
 use crate::core::CoordinatorCore;
 use jsonrpsee_types::request::Request;
 use jsonrpsee_types::Params;
@@ -372,7 +372,11 @@ impl<'a> JsonRpcHandler<'a> {
         id: Id,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
         let sender = self.extract_sender(message)?;
-        self.core.handle_sign_in(sender.clone(), identity)?;
+        let identity_bytes = match &identity {
+            Identity::Component { identity } | Identity::Coordinator { identity } => identity,
+            Identity::SelfTarget => return self.create_null_response_outcome(message, id),
+        };
+        self.core.handle_sign_in(sender.clone(), identity_bytes)?;
         self.create_null_response_outcome(message, id)
     }
 
@@ -383,7 +387,11 @@ impl<'a> JsonRpcHandler<'a> {
         id: Id,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
         let sender = self.extract_sender(message)?;
-        self.core.handle_sign_out(identity, sender.clone())?;
+        let identity_bytes = match &identity {
+            Identity::Component { identity } | Identity::Coordinator { identity } => identity,
+            Identity::SelfTarget => return self.create_null_response_outcome(message, id),
+        };
+        self.core.handle_sign_out(identity_bytes, sender.clone())?;
         self.create_null_response_outcome(message, id)
     }
 
