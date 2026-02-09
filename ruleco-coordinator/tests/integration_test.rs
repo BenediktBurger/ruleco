@@ -10,7 +10,7 @@ fn test_coordinator_sign_in_response() {
     let namespace = "test_namespace";
     let port = 5555; // Use a fixed port for testing
     let mut coordinator =
-        CoordinatorApp::new(namespace, Some(port)).expect("Failed to create coordinator");
+        CoordinatorApp::new(namespace, Some(port), None).expect("Failed to create coordinator");
 
     // Start coordinator in a separate thread
     let _coordinator_thread = thread::spawn(move || {

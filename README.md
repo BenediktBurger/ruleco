@@ -14,7 +14,7 @@ You are welcome to contribute, especially commenting on code improvements, as th
 This repository is a workspace and contains several crates.
 
 - _ruleco-core_ contains some useful elements to create LECO applications in Rust, e.g. a `Message` struct.
-- _ruleco-coordinator_ contains a Coordinator implementation.
+- _ruleco-coordinator_ contains a Coordinator implementation. Supports configuration via TOML config file (see [CONFIG.md](CONFIG.md)).
 - _ruleco-legacy_ contains my initial trials of ruleco code.
 
 ## Coordinator Architecture

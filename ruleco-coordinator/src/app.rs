@@ -24,15 +24,18 @@ pub struct CoordinatorApp<T = ZmqAdapter> {
     running: bool,
     /// Track pending coordinator sign-in requests: dealer_identity -> address
     pending_sign_ins: std::collections::HashMap<Vec<u8>, String>,
+    /// Timeout interval in seconds for device communication timeout checks
+    timeout_interval: u64,
 }
 
 impl CoordinatorApp<ZmqAdapter> {
     /// Create a new coordinator application
-    pub fn new(namespace: &str, port: Option<u16>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(namespace: &str, port: Option<u16>, timeout_interval: Option<u64>) -> Result<Self, Box<dyn std::error::Error>> {
         let port = port.unwrap_or(protocol_constants::DEFAULT_COORDINATOR_PORT);
+        let timeout_interval = timeout_interval.unwrap_or(10);
         let mut zmq_adapter = ZmqAdapter::new()?;
         zmq_adapter.listen_for_components(&format!("tcp://*:{}", &port))?;
-        Self::new_with_adapter(namespace, zmq_adapter)
+        Self::new_with_adapter(namespace, zmq_adapter, timeout_interval)
     }
 }
 
@@ -44,6 +47,7 @@ where
     pub fn new_with_adapter(
         namespace: &str,
         adapter: T,
+        timeout_interval: u64,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let namespace_bytes = namespace.as_bytes().to_vec();
         let directory_adapter = InMemoryDirectoryAdapter::new(namespace_bytes.clone());
@@ -59,6 +63,7 @@ where
             name,
             running: false,
             pending_sign_ins: std::collections::HashMap::new(),
+            timeout_interval,
         })
     }
 
@@ -68,7 +73,7 @@ where
         println!("Coordinator started");
 
         while self.running {
-            let _ = self.core.check_timeouts(Duration::from_secs(10));
+            let _ = self.core.check_timeouts(Duration::from_secs(self.timeout_interval));
 
             // Poll for messages with a timeout
             if let Err(e) = self.poll_and_process_messages() {
@@ -376,7 +381,7 @@ mod tests {
     /// Contains already two Components and a Coordinator configured.
     fn create_default_app() -> CoordinatorApp<MockAdapter> {
         let mock_adapter = MockAdapter::new();
-        let mut app = CoordinatorApp::new_with_adapter(NAMESPACE, mock_adapter)
+        let mut app = CoordinatorApp::new_with_adapter(NAMESPACE, mock_adapter, 10)
             .expect("Failed to create CoordinatorApp");
 
         // Sign in the components
@@ -395,7 +400,7 @@ mod tests {
         // Create a minimal CoordinatorApp instance for testing
         let namespace = NAMESPACE;
         let mut app =
-            CoordinatorApp::new(namespace, Some(0)).expect("Failed to create CoordinatorApp");
+            CoordinatorApp::new(namespace, Some(0), None).expect("Failed to create CoordinatorApp");
 
         let identity = vec![1, 2, 3, 4];
 

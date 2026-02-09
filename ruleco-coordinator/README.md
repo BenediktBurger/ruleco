@@ -94,6 +94,46 @@ Without this enum distinction, routing logic cannot properly:
 └────────────────────────────────────┘
 ```
 
+## Configuration
+
+The coordinator can be configured using a TOML config file. See [../CONFIG.md](../CONFIG.md) for detailed configuration options.
+
+### Quick Start
+
+To use a config file, create `ruleco.toml` in your project directory:
+
+```toml
+[coordinator]
+namespace = ""  # Use hostname automatically
+timeout_interval = 10
+```
+
+The coordinator will automatically load the config when started:
+
+```bash
+cargo run -p ruleco-coordinator
+```
+
+### Namespace Auto-Detection
+
+For lab environments with one coordinator per machine, use `namespace = ""` to automatically use the machine's hostname. This avoids namespace conflicts without manual configuration.
+
+### Config File Locations
+
+Config is loaded from the first existing file in this order:
+
+1. `./ruleco.toml` (current directory)
+2. `~/.config/ruleco/config.toml` (XDG config home)
+
+If no config file is found, sensible defaults are used (namespace: `Default_Namespace`).
+
+### Settings
+
+| Setting            | Type   | Default             | Description                                                         |
+|--------------------|--------|---------------------|---------------------------------------------------------------------|
+| `namespace`        | String | `Default_Namespace` | The coordinator\'s namespace. Use `""` to auto-detect from hostname |
+| `timeout_interval` | u32    | `10`                | Timeout interval in seconds for device communication checks         |
+
 ## Testing
 
 To test the coordinator's message handling and routing:
