@@ -21,24 +21,30 @@ fn test_coordinator_sign_in() {
         coordinator.run().expect("Coordinator failed to run");
     });
 
-    thread::sleep(Duration::from_millis(100));
-
     let context = zmq::Context::new();
     let client_socket = context.socket(zmq::DEALER).unwrap();
     client_socket
         .connect(&format!("tcp://127.0.0.1:{}", port))
         .expect("Failed to connect client");
 
-    let sign_in_request = r#"{"jsonrpc":"2.0","method":"sign_in","id":1}"#;
-
-    client_socket
-        .send(sign_in_request, 0)
-        .expect("Failed to send request");
-
-    let response = client_socket
-        .recv_string(0)
-        .expect("Failed to receive response")
-        .unwrap();
-
-    assert!(response.contains(r#""result":null"#));
+    let mut retries = 0;
+    let max_retries = 50;
+    loop {
+        let sign_in_request = r#"{"jsonrpc":"2.0","method":"sign_in","id":1}"#;
+        if client_socket.send(sign_in_request, zmq::DONTWAIT).is_ok() {
+            match client_socket.recv_string(zmq::DONTWAIT) {
+                Ok(Ok(response)) => {
+                    if response.contains(r#""result":null"#) {
+                        break;
+                    }
+                }
+                Ok(Err(_)) | Err(_) => {}
+            }
+        }
+        retries += 1;
+        if retries >= max_retries {
+            panic!("Coordinator not ready after {} retries ({}ms)", max_retries, max_retries * 10);
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
