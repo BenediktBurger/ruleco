@@ -444,11 +444,7 @@ impl<'a> JsonRpcHandler<'a> {
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
         let nodes = params.parse::<AddNodesParams>()?;
         let addresses = self.core.handle_add_nodes(nodes);
-        let response_outcome = self.create_null_response_outcome(message, id);
-        let mut outcomes = match response_outcome {
-            Ok(outcomes) => outcomes,
-            Err(..) => Vec::new(),
-        };
+        let mut outcomes = self.create_null_response_outcome(message, id)?;
         match addresses {
             Some(addresses) => outcomes.push(JsonRpcOutcome::AddNodes(addresses)),
             None => (),
@@ -504,15 +500,17 @@ impl<'a> JsonRpcHandler<'a> {
 }
 
 #[cfg(test)]
-mod tests {
-    use ruleco_core::{
-        full_name::FullName, message::MessageBuilder, protocol_constants::MessageType,
-    };
+    mod tests {
+        use crate::core::parameter_types::AddNodesParams;
+        use jsonrpsee_types::request::Request;
+        use ruleco_core::{
+            full_name::FullName, message::MessageBuilder, protocol_constants::MessageType,
+        };
 
-    #[test]
-    fn test_handle_add_node() {
+        #[test]
+        fn test_handle_add_node() {
         let request_json = r#"{"jsonrpc": "2.0", "method": "add_nodes", "params": {"nodes": {"N1": "N1host:12300", "N2": "wrong_host:-7", "N3": "N3host:12300"}}, "id": 2}"#;
-        let _message = MessageBuilder::new()
+        let message = MessageBuilder::new()
             .receiver(FullName::from_slice(b"test_ns.COORDINATOR").unwrap())
             .sender(FullName::from_slice(b"some_sender").unwrap())
             .message_type(MessageType::Json.into())
@@ -521,5 +519,13 @@ mod tests {
             .unwrap()
             .to_view()
             .unwrap();
+
+        let content_frame = message.content_frame().unwrap();
+        let request: Request = serde_json::from_slice(content_frame).unwrap();
+        let params = request.params();
+        let add_nodes_params = params.parse::<AddNodesParams>().unwrap();
+
+        assert_eq!(add_nodes_params.nodes.len(), 3);
+        assert_eq!(add_nodes_params.nodes.get("N1"), Some(&"N1host:12300".to_string()));
     }
 }

@@ -178,6 +178,10 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
     pub fn directory_mut(&mut self) -> &mut D {
         &mut self.directory
     }
+
+    pub fn clock(&self) -> &C {
+        &self.clock
+    }
 }
 
 impl<D: DirectoryPort, C: ClockPort> RoutingPort<D, C> for CoordinatorCore<D, C> {

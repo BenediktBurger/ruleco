@@ -3,6 +3,8 @@ use crate::core::ports::{ConnectionManagementPort, MessagePort};
 use ruleco_core::message::ConversationId;
 use zmq;
 
+const DEALER_POLL_TIMEOUT_MS: i64 = 10;
+
 /// ZMQ implementation of the message port and connection management port
 pub struct ZmqAdapter {
     /// The ZMQ context
@@ -53,54 +55,50 @@ impl ZmqAdapter {
         self.dealer_sockets.iter()
     }
 
-    /// Poll for messages with a timeout
-    ///
-    /// # Parameters
-    /// * `timeout_ms` - Timeout in milliseconds
-    ///
-    /// # Returns
-    /// A vector of indices of readable sockets, or empty vector if no sockets are readable
-    fn poll_messages(&self, timeout_ms: i64) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
-        // Pre-allocate poll items vector with capacity for router + estimated dealer sockets
-        // This reduces allocations compared to the previous approach
-        let mut poll_items = Vec::with_capacity(1 + self.dealer_sockets.len());
+    /// Poll router socket for messages
+    fn poll_router(&self, timeout_ms: i64) -> Result<bool, Box<dyn std::error::Error>> {
+        let mut poll_items = vec![self.router_socket.as_poll_item(zmq::POLLIN)];
+        Ok(zmq::poll(&mut poll_items, timeout_ms)? > 0)
+    }
 
-        // Add router socket first (index 0)
+    /// Receive a message from the router socket
+    fn receive_from_router(&self) -> Result<(Identity, Vec<Vec<u8>>), Box<dyn std::error::Error>> {
+        let identity = self.router_socket.recv_bytes(0)?;
+        let frames = self.router_socket.recv_multipart(0)?;
+        Ok((Identity::Component { identity }, frames))
+    }
+
+    /// Poll dealer sockets for messages
+    fn poll_dealers(&self) -> Result<(Vec<usize>, Vec<Vec<u8>>), Box<dyn std::error::Error>> {
+        let dealer_identities: Vec<Vec<u8>> = self
+            .dealer_sockets_iter()
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        if dealer_identities.is_empty() {
+            return Ok((Vec::new(), dealer_identities));
+        }
+
+        let mut poll_items = Vec::with_capacity(1 + dealer_identities.len());
         poll_items.push(self.router_socket.as_poll_item(zmq::POLLIN));
-
-        // Add dealer sockets (indices 1..n)
-        // We collect the sockets first to avoid borrowing conflicts
-        let dealer_sockets: Vec<&zmq::Socket> = self.dealer_sockets.values().collect();
-
-        for socket in dealer_sockets {
+        for socket in self.dealer_sockets.values() {
             poll_items.push(socket.as_poll_item(zmq::POLLIN));
         }
 
-        // Poll for messages with a timeout
-        let mut readable_indices = Vec::new();
-        if zmq::poll(&mut poll_items[..], timeout_ms)? > 0 {
-            // Collect indices of readable sockets first
-            for (i, poll_item) in poll_items.iter().enumerate() {
-                if poll_item.is_readable() {
-                    readable_indices.push(i);
+        let mut readable = Vec::new();
+        if zmq::poll(&mut poll_items[..], DEALER_POLL_TIMEOUT_MS)? > 0 {
+            for (i, item) in poll_items.iter().enumerate() {
+                if item.is_readable() {
+                    readable.push(i);
                 }
             }
         }
 
-        Ok(readable_indices)
+        Ok((readable, dealer_identities))
     }
 
-    /// Receive a message from a socket (ROUTER), returning the identity and frames
-    fn receive_frames_from_router(
-        &self,
-    ) -> Result<(Vec<u8>, Vec<Vec<u8>>), Box<dyn std::error::Error>> {
-        let identity = self.router_socket.recv_bytes(0)?;
-        let frames = self.router_socket.recv_multipart(0)?;
-        Ok((identity, frames))
-    }
-
-    /// Receive frames from a DEALER socket (no identity prefix)
-    fn receive_frames_from_dealer(
+    /// Receive a message from a dealer socket
+    fn receive_from_dealer(
         &self,
         socket: &zmq::Socket,
     ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
@@ -109,43 +107,6 @@ impl ZmqAdapter {
             return Err("Invalid message format: no parts".into());
         }
         Ok(frames)
-    }
-
-    /// Receive all available messages within a timeout
-    ///
-    /// This polls all sockets (ROUTER and DEALERs) and returns all available messages.
-    fn receive_frames_all(
-        &self,
-        timeout_ms: u64,
-    ) -> Result<Vec<(Vec<u8>, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
-        let mut messages: Vec<(Vec<u8>, Vec<Vec<u8>>)> = Vec::new();
-
-        let readable_indices = self.poll_messages(timeout_ms as i64)?;
-
-        if !readable_indices.is_empty() {
-            let dealer_identities: Vec<Vec<u8>> = self
-                .dealer_sockets_iter()
-                .map(|(identity, _)| identity.clone())
-                .collect();
-
-            if readable_indices.contains(&0) {
-                let (identity, frames) = self.receive_frames_from_router()?;
-                messages.push((identity, frames));
-            }
-
-            for &index in &readable_indices {
-                if index > 0 && index <= dealer_identities.len() {
-                    let dealer_identity = &dealer_identities[index - 1];
-                    if let Some(socket) = self.dealer_sockets.get(dealer_identity) {
-                        let frames = self.receive_frames_from_dealer(socket)?;
-                        // For DEALER, we tag with the dealer identity for routing purposes
-                        messages.push((dealer_identity.clone(), frames));
-                    }
-                }
-            }
-        }
-
-        Ok(messages)
     }
 }
 
@@ -174,31 +135,31 @@ impl MessagePort for ZmqAdapter {
         Ok(())
     }
 
-    fn recv(&self) -> Result<(Identity, Vec<Vec<u8>>), Box<dyn std::error::Error>> {
-        let poll_item = self.router_socket.as_poll_item(zmq::POLLIN);
+    fn recv(&self, timeout_ms: u64) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
+        let timeout_i64 = timeout_ms as i64;
 
-        if zmq::poll(&mut [poll_item], -1)? > 0 {
-            let (identity, frames) = self.receive_frames_from_router()?;
-            return Ok((Identity::Component { identity }, frames));
+        if self.poll_router(timeout_i64)? {
+            Ok(Some(self.receive_from_router()?))
+        } else {
+            Ok(None)
         }
-
-        Err("No messages available".into())
     }
 
-    fn recv_all(
+    fn recv_coordinator_sign_ins(
         &self,
-        timeout_ms: u64,
     ) -> Result<Vec<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
-        let mut messages: Vec<(Identity, Vec<Vec<u8>>)> = Vec::new();
-        let raw_messages = self.receive_frames_all(timeout_ms)?;
+        let mut messages = Vec::new();
+        let (readable, dealer_ids) = self.poll_dealers()?;
 
-        for (identity, frames) in raw_messages {
-            let ident_enum = if self.dealer_sockets.contains_key(&identity) {
-                Identity::Coordinator { identity }
-            } else {
-                Identity::Component { identity }
-            };
-            messages.push((ident_enum, frames));
+        for index in readable {
+            if index > 0 && index <= dealer_ids.len() {
+                let dealer_id = &dealer_ids[index - 1];
+                if let Some(socket) = self.dealer_sockets.get(dealer_id) {
+                    if let Ok(frames) = self.receive_from_dealer(socket) {
+                        messages.push((Identity::Coordinator { identity: dealer_id.clone() }, frames));
+                    }
+                }
+            }
         }
 
         Ok(messages)

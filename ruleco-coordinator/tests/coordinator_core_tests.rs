@@ -292,7 +292,8 @@ fn test_route_message_from_remote_component() {
         .unwrap();
 
     // The sender is from a remote namespace ("remote_namespace"), so no validation is needed.
-    // The identity is just for the ROUTER socket, but the actual sender is remote.
+    // This message was received at our ROUTER socket (sent from remote coordinator's DEALER).
+    // The identity indicates which of our sockets received the message (our ROUTER for local component connections).
     let decision = core.route_message(
         &message.to_view().unwrap(),
         &local_identity(COMPONENT1_IDENTITY),

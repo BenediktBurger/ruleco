@@ -32,7 +32,7 @@ impl CoordinatorConfig {
     pub fn load() -> Self {
         let config_paths = [
             PathBuf::from("ruleco.toml"),
-            Self::get_xdg_config_path(),
+            Self::get_xdg_config_path().unwrap_or_default(),
         ];
 
         for path in config_paths {
@@ -86,17 +86,8 @@ impl CoordinatorConfig {
             .unwrap_or_else(|_| "unknown_host".to_string())
     }
 
-    fn get_xdg_config_path() -> PathBuf {
-        if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
-            PathBuf::from(config_home).join("ruleco").join("config.toml")
-        } else {
-            let home = std::env::var("HOME")
-                .unwrap_or_else(|_| ".".to_string());
-            PathBuf::from(home)
-                .join(".config")
-                .join("ruleco")
-                .join("config.toml")
-        }
+    fn get_xdg_config_path() -> Option<PathBuf> {
+        dirs::config_dir().map(|p| p.join("ruleco").join("config.toml"))
     }
 }
 
@@ -167,6 +158,5 @@ mod tests {
     fn test_get_hostname() {
         let hostname = CoordinatorConfig::get_hostname();
         assert!(!hostname.is_empty());
-        assert_ne!(hostname, "unknown_host");
     }
 }

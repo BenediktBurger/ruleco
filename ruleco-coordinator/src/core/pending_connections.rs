@@ -35,11 +35,12 @@ impl PendingConnections {
         &mut self,
         dealer_identity: Vec<u8>,
         address: String,
+        clock: &dyn crate::core::ports::ClockPort,
     ) -> &PendingConnectionInfo {
         let info = PendingConnectionInfo {
             address,
             remote_name: None,
-            initiated_at: std::time::Instant::now(),
+            initiated_at: clock.now(),
         };
         self.connections.insert(dealer_identity.clone(), info);
         self.connections.get(&dealer_identity).unwrap()
@@ -84,5 +85,13 @@ impl PendingConnections {
         }
 
         timed_out
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.connections.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.connections.len()
     }
 }

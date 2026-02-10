@@ -30,17 +30,17 @@ The coordinator follows a hexagonal (ports and adapters) architecture pattern:
    - Independent of any specific implementation details (ZMQ, storage, etc.)
 
 2. **Ports** (`ruleco-coordinator/src/core/ports/`)
-   - Define interfaces for external dependencies:
-     - `MessageSenderPort`: Interface for sending messages (local/remote/error responses)
-     - `MessageReceiverPort`: Interface for receiving messages (local/remote)
-     - `DirectoryPort`: Interface for component/coordinator directory management
-     - `ClockPort`: Interface for time-related operations
+    - Define interfaces for external dependencies:
+      - `MessagePort`: Interface for sending and receiving messages (handles local/remote/error responses)
+      - `ConnectionManagementPort`: Interface for transport connection lifecycle management
+      - `DirectoryPort`: Interface for component/coordinator directory management
+      - `ClockPort`: Interface for time-related operations
 
 3. **Adapters** (`ruleco-coordinator/src/adapters/`)
-   - Implement the port interfaces with concrete technologies:
-     - `ZmqAdapter`: Implements `MessageSenderPort` and `MessageReceiverPort` using ZeroMQ sockets
-     - `InMemoryDirectoryAdapter`: Implements `DirectoryPort` with in-memory storage
-     - `SystemClockAdapter`: Implements `ClockPort` using system time
+    - Implement the port interfaces with concrete technologies:
+      - `ZmqAdapter`: Implements `MessagePort` and `ConnectionManagementPort` using ZeroMQ sockets
+      - `InMemoryDirectoryAdapter`: Implements `DirectoryPort` with in-memory storage
+      - `SystemClockAdapter`: Implements `ClockPort` using system time
 
 4. **Application Layer** (`ruleco-coordinator/src/app.rs`)
    - Orchestrates the components
@@ -53,18 +53,18 @@ The coordinator follows a hexagonal (ports and adapters) architecture pattern:
 For testing the coordinator's message handling and routing:
 
 1. **Unit Testing CoordinatorCore**
-   - Test the `route_message` method directly with various message scenarios
-   - Use mock implementations of `DirectoryPort` and `ClockPort` to control test conditions
-   - Verify correct `RoutingDecision` is returned for different message types
+    - Test the `route_message` method directly with various message scenarios
+    - Use mock implementations of `DirectoryPort` and `ClockPort` to control test conditions
+    - Verify correct `RoutingDecision` is returned for different message types
 
-2. **Testing with Mocked MessageSenderPort**
-   - Use `mockall` crate to generate mock implementations of `MessageSenderPort`
-   - Test that the coordinator sends the correct messages to the right destinations
-   - Isolate testing of routing logic from actual network communication
+2. **Testing with Mocked MessagePort**
+    - Use `mockall` crate to generate mock implementations of `MessagePort`
+    - Test that the coordinator sends the correct messages to the right destinations
+    - Isolate testing of routing logic from actual network communication
 
 3. **Integration Testing**
-   - Test with real ZMQ sockets for end-to-end verification
-   - Verify the complete message flow from client to coordinator to destination
+    - Test with real ZMQ sockets for end-to-end verification
+    - Verify the complete message flow from client to coordinator to destination
 
 ### Key Design Principles
 

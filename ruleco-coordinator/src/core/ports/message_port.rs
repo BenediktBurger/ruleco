@@ -61,31 +61,30 @@ pub trait MessagePort {
         frames: Vec<Vec<u8>>,
     ) -> Result<(), Box<dyn std::error::Error>>;
 
-    /// Receive frames with source context
+    /// Receive a message with timeout
     ///
-    /// Returns the source context (component, coordinator, or self) along with frames.
-    ///
-    /// # Returns
-    /// A tuple of (source_context, received_frames)
-    fn recv(&self) -> Result<(Identity, Vec<Vec<u8>>), Box<dyn std::error::Error>>;
-
-    /// Receive all available messages within a timeout
-    ///
-    /// This method should poll all available connections and return all messages
-    /// that are currently available.
+    /// Polls for a single message from the router socket within the timeout period.
     ///
     /// # Parameters
     /// * `timeout_ms` - Timeout in milliseconds
     ///
     /// # Returns
-    /// A vector of tuples containing (source_context, received_frames)
-    fn recv_all(
+    /// Some((source_context, received_frames)) if a message is available, None on timeout
+    fn recv(
         &self,
-        _timeout_ms: u64,
-    ) -> Result<Vec<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
-        let (identity, frames) = self.recv()?;
-        Ok(vec![(identity, frames)])
-    }
+        timeout_ms: u64,
+    ) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>>;
+
+    /// Receive coordinator sign-in responses
+    ///
+    /// Polls dealer sockets for coordinator sign-in acknowledgments with a short timeout.
+    /// Returns empty vector if no pending coordinator connections or no messages available.
+    ///
+    /// # Returns
+    /// A vector of tuples containing (source_context, received_frames)
+    fn recv_coordinator_sign_ins(
+        &self,
+    ) -> Result<Vec<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>>;
 }
 
 /// Interface for connection lifecycle management

@@ -1,5 +1,6 @@
 use crate::adapters::{InMemoryDirectoryAdapter, SystemClockAdapter, ZmqAdapter};
 use crate::core::domain::RoutingError;
+use crate::core::pending_connections::PendingConnections;
 use crate::core::ports::message_port::Identity;
 use crate::core::ports::routing_port::RoutingPort;
 use crate::core::ports::{ConnectionManagementPort, MessagePort};
@@ -22,8 +23,8 @@ pub struct CoordinatorApp<T = ZmqAdapter> {
     name: FullName,
     /// Flag to indicate if the coordinator is running
     running: bool,
-    /// Track pending coordinator sign-in requests: dealer_identity -> address
-    pending_sign_ins: std::collections::HashMap<Vec<u8>, String>,
+    /// Track pending coordinator connections
+    pending_connections: PendingConnections,
     /// Timeout interval in seconds for device communication timeout checks
     timeout_interval: u64,
 }
@@ -62,7 +63,7 @@ where
             adapter,
             name,
             running: false,
-            pending_sign_ins: std::collections::HashMap::new(),
+            pending_connections: PendingConnections::new(),
             timeout_interval,
         })
     }
@@ -74,6 +75,13 @@ where
 
         while self.running {
             let _ = self.core.check_timeouts(Duration::from_secs(self.timeout_interval));
+
+            let timeout_duration = Duration::from_secs(self.timeout_interval);
+            let timed_out = self.pending_connections.check_timeouts(timeout_duration);
+            for dealer_identity in timed_out {
+                eprintln!("Pending connection timed out");
+                let _ = self.adapter.disconnect_from_coordinator(&dealer_identity);
+            }
 
             // Poll for messages with a timeout
             if let Err(e) = self.poll_and_process_messages() {
@@ -87,10 +95,21 @@ where
 
     /// Poll for messages and process them
     fn poll_and_process_messages(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let messages = self.adapter.recv_all(100)?;
+        let timeout_ms = 100;
 
-        for (sender_identity, frames) in messages {
-            self.process_raw_message(sender_identity, frames)?;
+        while let Some((sender_identity, frames)) = self.adapter.recv(timeout_ms)? {
+            if let Err(e) = self.process_raw_message(sender_identity, frames) {
+                eprintln!("Error processing message: {}", e);
+            }
+        }
+
+        if !self.pending_connections.is_empty() {
+            let coordinator_msgs = self.adapter.recv_coordinator_sign_ins()?;
+            for (sender_identity, frames) in coordinator_msgs {
+                if let Err(e) = self.process_raw_message(sender_identity, frames) {
+                    eprintln!("Error processing message: {}", e);
+                }
+            }
         }
 
         Ok(())
@@ -204,10 +223,10 @@ where
                 );
             }
 
-            if let Some(address) = self.pending_sign_ins.get(&sender_identity_bytes) {
+            if let Some(conn_info) = self.pending_connections.get_pending_connection(&sender_identity_bytes) {
                 if self.core.is_error_response(message) {
-                    eprintln!("Coordinator sign-in failed for {}", address);
-                    self.pending_sign_ins.remove(&sender_identity_bytes);
+                    eprintln!("Coordinator sign-in failed for {}", conn_info.address);
+                    self.pending_connections.complete_connection(&sender_identity_bytes);
                     let _ = self
                         .adapter
                         .disconnect_from_coordinator(&sender_identity_bytes);
@@ -217,15 +236,15 @@ where
                 if let Err(e) = self.core.handle_coordinator_sign_in_success(
                     &sender_identity_bytes,
                     sender_name.clone(),
-                    address.clone(),
+                    conn_info.address.clone(),
                 ) {
                     eprintln!("Error handling coordinator sign-in success: {}", e);
-                    self.pending_sign_ins.remove(&sender_identity_bytes);
+                    self.pending_connections.complete_connection(&sender_identity_bytes);
                     let _ = self
                         .adapter
                         .disconnect_from_coordinator(&sender_identity_bytes);
                 } else {
-                    self.pending_sign_ins.remove(&sender_identity_bytes);
+                    self.pending_connections.complete_connection(&sender_identity_bytes);
                 }
             }
         }
@@ -285,14 +304,7 @@ where
                 Err(_) => return Ok(()),
             }
         };
-        match &identity {
-            Identity::SelfTarget => {
-                return Ok(());
-            }
-            _ => {
-                self.adapter.send(&identity, error_message.into_raw_frames())?;
-            }
-        }
+        self.adapter.send(&identity, error_message.into_raw_frames())?;
         Ok(())
     }
 
@@ -300,16 +312,18 @@ where
         let dealer_identity = match self.adapter.connect_to_coordinator(&address) {
             Ok(id) => id,
             Err(err) => {
-                eprintln!("{}", err);
+                eprintln!("Failed to connect to coordinator at {}: {}", address, err);
                 return;
             }
         };
 
-        self.pending_sign_ins
-            .insert(dealer_identity.clone(), address.clone());
+        self.pending_connections.add_pending_connection(dealer_identity.clone(), address.clone(), self.core.clock());
 
-        let request =
-            Request::borrowed("coordinator_sign_in", None, jsonrpsee_types::Id::Number(2));
+        let request = Request::borrowed(
+            "coordinator_sign_in",
+            None,
+            jsonrpsee_types::Id::Number(2),
+        );
         let message = MessageBuilder::new()
             .receiver(FullName::from_slice(b"COORDINATOR").unwrap())
             .sender(self.name.clone())
@@ -320,12 +334,16 @@ where
             .to_view()
             .unwrap();
 
-        let _ = self.adapter.send(
+        if let Err(err) = self.adapter.send(
             &Identity::Coordinator {
-                identity: dealer_identity,
+                identity: dealer_identity.clone(),
             },
             message.into_raw_frames(),
-        );
+        ) {
+            eprintln!("Failed to send coordinator sign-in request: {}", err);
+            let _ = self.adapter.disconnect_from_coordinator(&dealer_identity);
+            self.pending_connections.complete_connection(&dealer_identity);
+        }
     }
 }
 
