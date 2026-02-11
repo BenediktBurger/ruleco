@@ -28,7 +28,7 @@ pub enum Identity {
     Component { identity: Vec<u8> },
     /// Message from a remote coordinator
     ///
-    /// The identity identifies the remote coordinator\'s connection.
+    /// The identity identifies the remote coordinator's connection.
     /// These are already authenticated and handled differently during processing.
     Coordinator { identity: Vec<u8> },
     /// Message to/from self (loopback)

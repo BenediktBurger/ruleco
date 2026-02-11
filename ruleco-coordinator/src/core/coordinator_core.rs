@@ -194,7 +194,7 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort<D, C> for CoordinatorCore<D, C>
             Err(error) => {
                 return Err(RoutingError::new(
                     error,
-                    Some(message.header().conversation_id.clone()).unwrap_or_default(),
+                    message.header().conversation_id.clone(),
                 ))
             }
         };
@@ -206,7 +206,7 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort<D, C> for CoordinatorCore<D, C>
             Err(error) => {
                 return Err(RoutingError::new(
                     error,
-                    Some(message.header().conversation_id.clone()).unwrap_or_default(),
+                    message.header().conversation_id.clone(),
                 ))
             }
         };
@@ -232,13 +232,13 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort<D, C> for CoordinatorCore<D, C>
                         Error::duplicate_name_with_data(serde_json::Value::String(
                             sender.to_string(),
                         )),
-                        Some(message.header().conversation_id.clone()).unwrap_or_default(),
+                        message.header().conversation_id.clone(),
                     ));
                 }
             } else {
                 return Err(RoutingError::new(
                     Error::not_signed_in(),
-                    Some(message.header().conversation_id.clone()).unwrap_or_default(),
+                    message.header().conversation_id.clone(),
                 ));
             }
         }
@@ -256,7 +256,7 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort<D, C> for CoordinatorCore<D, C>
             }
             return Err(RoutingError::new(
                 Error::receiver_unknown_with_data(receiver.to_string().into()),
-                Some(message.header().conversation_id.clone()).unwrap_or_default(),
+                message.header().conversation_id.clone(),
             ));
         }
 
@@ -271,7 +271,7 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort<D, C> for CoordinatorCore<D, C>
 
         Err(RoutingError::new(
             Error::node_unknown_with_data(receiver.namespace().into()),
-            Some(message.header().conversation_id.clone()).unwrap_or_default(),
+            message.header().conversation_id.clone(),
         ))
     }
 }

@@ -6,7 +6,7 @@ use crate::core::ports::routing_port::RoutingPort;
 use crate::core::ports::{ConnectionManagementPort, MessagePort};
 use crate::core::CoordinatorCore;
 use crate::jsonrpc_handler::{JsonRpcHandler, JsonRpcOutcome};
-use jsonrpsee_types::Request;
+use jsonrpsee_types::{Id, Request};
 use ruleco_core::errors::Error;
 use ruleco_core::full_name::FullName;
 use ruleco_core::message::{MessageBuilder, MessageView};
@@ -74,6 +74,7 @@ where
         println!("Coordinator started");
 
         while self.running {
+            // TODO handle timeout by sending RPC request for pong method and later removing it.
             let _ = self.core.check_timeouts(Duration::from_secs(self.timeout_interval));
 
             let timeout_duration = Duration::from_secs(self.timeout_interval);
@@ -245,6 +246,7 @@ where
                         .disconnect_from_coordinator(&sender_identity_bytes);
                 } else {
                     self.pending_connections.complete_connection(&sender_identity_bytes);
+                    return Ok(());
                 }
             }
         }
@@ -300,7 +302,7 @@ where
         let error_message = {
             let handler = JsonRpcHandler::new(&mut self.core, &self.name);
             match message.sender() {
-                Ok(name) => handler.create_error_response(name, error, Some(conversation_id))?,
+                Ok(name) => handler.create_error_response(name, Id::Null, error, Some(conversation_id))?,
                 Err(_) => return Ok(()),
             }
         };
@@ -324,15 +326,36 @@ where
             None,
             jsonrpsee_types::Id::Number(2),
         );
-        let message = MessageBuilder::new()
-            .receiver(FullName::from_slice(b"COORDINATOR").unwrap())
+        let receiver_name = match FullName::from_slice(b"COORDINATOR") {
+            Ok(name) => name,
+            Err(e) => {
+                eprintln!("Failed to create remote coordinator name: {}", e);
+                return;
+            }
+        };
+        let message = match MessageBuilder::new()
+            .receiver(receiver_name)
             .sender(self.name.clone())
             .payload_json(&request)
-            .unwrap()
-            .build()
-            .unwrap()
-            .to_view()
-            .unwrap();
+        {
+            Ok(builder) => match builder.build() {
+                Ok(built_msg) => match built_msg.to_view() {
+                    Ok(view) => view,
+                    Err(e) => {
+                        eprintln!("Failed to create message view: {}", e);
+                        return;
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Failed to build message: {}", e);
+                    return;
+                }
+            },
+            Err(e) => {
+                eprintln!("Failed to add payload to message: {}", e);
+                return;
+            }
+        };
 
         if let Err(err) = self.adapter.send(
             &Identity::Coordinator {
@@ -417,9 +440,9 @@ mod tests {
     fn handle_self_message_no_content_frame_returns_ok() {
         // Create a minimal CoordinatorApp instance for testing
         let namespace = NAMESPACE;
+        let mock_adapter = MockAdapter::new();
         let mut app =
-            CoordinatorApp::new(namespace, Some(0), None).expect("Failed to create CoordinatorApp");
-
+            CoordinatorApp::new_with_adapter(namespace, mock_adapter, 10).expect("Failed to create CoordinatorApp");
         let identity = vec![1, 2, 3, 4];
 
         let sender_name = FullName::new(b"test_namespace".to_vec(), b"sender".to_vec());

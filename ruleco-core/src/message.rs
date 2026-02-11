@@ -148,8 +148,7 @@ pub struct MessageView {
     receiver: Result<FullName, FullNameError>,
     sender: Result<FullName, FullNameError>,
     header: Header,
-    // `payload` is a view into `self.frames`.
-    payload: &'static [Vec<u8>],
+    payload_start: usize,
 }
 
 impl MessageView {
@@ -170,14 +169,7 @@ impl MessageView {
         let sender_result = FullName::from_slice(&frames[2]);
 
         let header = Header::from_slice(&frames[3])?;
-        let payload_slice: &[Vec<u8>] = &frames[4..];
-
-        // SAFETY: The `payload_slice` points to data inside `frames`, which is owned by this struct.
-        // Extending its lifetime to 'static is safe as long as `self.frames` is never moved
-        // or dropped before `self.payload` is used. Since `frames` is owned and pinned within
-        // this struct, and `payload` is just a view, this is a safe usage of `transmute` for
-        // lifetime extension in this context.
-        let payload_extended: &'static [Vec<u8>] = unsafe { std::mem::transmute(payload_slice) };
+        let payload_start = 4;
 
         Ok(Self {
             frames,
@@ -185,7 +177,7 @@ impl MessageView {
             receiver: receiver_result,
             sender: sender_result,
             header,
-            payload: payload_extended, // Zero-copy view of the payload
+            payload_start,
         })
     }
 
@@ -217,11 +209,11 @@ impl MessageView {
     }
 
     pub fn payload(&self) -> &[Vec<u8>] {
-        self.payload
+        &self.frames[self.payload_start..]
     }
 
     pub fn content_frame(&self) -> Option<&Vec<u8>> {
-        self.payload.first()
+        self.payload().first()
     }
 
     /// Extract sender with standard error handling

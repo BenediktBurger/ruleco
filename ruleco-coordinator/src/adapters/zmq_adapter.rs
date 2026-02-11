@@ -1,3 +1,5 @@
+use std::i64;
+
 use crate::core::ports::message_port::Identity;
 use crate::core::ports::{ConnectionManagementPort, MessagePort};
 use ruleco_core::message::ConversationId;
@@ -136,7 +138,7 @@ impl MessagePort for ZmqAdapter {
     }
 
     fn recv(&self, timeout_ms: u64) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
-        let timeout_i64 = timeout_ms as i64;
+        let timeout_i64 = i64::try_from(timeout_ms).unwrap_or(i64::MAX);
 
         if self.poll_router(timeout_i64)? {
             Ok(Some(self.receive_from_router()?))

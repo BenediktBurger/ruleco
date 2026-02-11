@@ -61,6 +61,7 @@ impl<'a> JsonRpcHandler<'a> {
                     Ok(sender_name) => {
                         let error_message = self.create_error_response(
                             sender_name,
+                            Id::Null,
                             &Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)),
                             Some(message.header().conversation_id.clone()),
                         )?;
@@ -88,6 +89,7 @@ impl<'a> JsonRpcHandler<'a> {
                         Ok(sender_name) => {
                             let error_message = self.create_error_response(
                                 sender_name,
+                                Id::Null,
                                 &Error::JsonRpc(ErrorObject::from(ErrorCode::ParseError)),
                                 Some(message.header().conversation_id.clone()),
                             )?;
@@ -100,12 +102,13 @@ impl<'a> JsonRpcHandler<'a> {
                     },
                 }
             }
-            _ => {
+_ => {
                 // Invalid JSON-RPC message
                 match message.sender() {
                     Ok(sender_name) => {
                         let error_message = self.create_error_response(
                             sender_name,
+                            Id::Null,
                             &Error::JsonRpc(ErrorObject::from(ErrorCode::InvalidRequest)),
                             Some(message.header().conversation_id.clone()),
                         )?;
@@ -113,7 +116,7 @@ impl<'a> JsonRpcHandler<'a> {
                     }
                     Err(e) => {
                         eprintln!("Error: Malformed sender name in message, cannot send error response: {:?}", e);
-                        Ok(vec![])
+                        return Ok(vec![]);
                     }
                 }
             }
@@ -133,6 +136,7 @@ impl<'a> JsonRpcHandler<'a> {
                 Ok(sender_name) => {
                     let error_message = self.create_error_response(
                         sender_name,
+                        Id::Null,
                         &Error::JsonRpc(ErrorObject::from(ErrorCode::InvalidRequest)),
                         Some(message.header().conversation_id.clone()),
                     )?;
@@ -246,7 +250,7 @@ impl<'a> JsonRpcHandler<'a> {
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
         match request.method_name() {
             // Component methods
-            "pong" => self.handle_pong(message, request.id),
+            "pong" => self.handle_pong(message, request.id()),
             // Extended component
             "shut_down" => self.handle_shut_down(message, request.id()),
             // Coordinator methods
@@ -265,6 +269,7 @@ impl<'a> JsonRpcHandler<'a> {
                 let sender = self.extract_sender(message)?;
                 let error_message = self.create_error_response(
                     sender,
+                    request.id(),
                     &Error::JsonRpc(ErrorObject::from(ErrorCode::MethodNotFound)),
                     Some(message.header().conversation_id.clone()),
                 )?;
@@ -297,6 +302,7 @@ impl<'a> JsonRpcHandler<'a> {
     pub fn create_error_response(
         &self,
         recipient_name: &FullName,
+        id: Id,
         error: &Error,
         conversation_id: Option<ConversationId>,
     ) -> Result<MessageView, Box<dyn std::error::Error>> {
@@ -306,14 +312,14 @@ impl<'a> JsonRpcHandler<'a> {
             Error::Custom(code, message) => ErrorObject::owned(*code, message.clone(), None::<()>),
         };
 
-        let error_response = Response::<()>::new(ResponsePayload::Error(error_object), Id::Null);
+        let error_response = Response::<()>::new(ResponsePayload::Error(error_object), id);
         let error_msg = serde_json::to_vec(&error_response)?;
 
         let message = MessageBuilder::new()
             .receiver(recipient_name.clone())
             .sender(self.name.clone()) // Use self.name
             .conversation_id(conversation_id.unwrap_or_default())
-            .message_type(1) // JSON message type
+            .message_type(MessageType::Json.into())
             .payload_single(error_msg)
             .build()?;
 
@@ -409,7 +415,8 @@ impl<'a> JsonRpcHandler<'a> {
         if sender.name() != b"COORDINATOR" {
             let error_message = self.create_error_response(
                 sender,
-                &Error::duplicate_name(),
+                id,
+                &Error::JsonRpc(ErrorObject::from(ErrorCode::InvalidParams)),
                 Some(message.header().conversation_id.clone()),
             )?;
 
@@ -433,6 +440,8 @@ impl<'a> JsonRpcHandler<'a> {
         message: &MessageView,
         id: Id,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        let sender = self.extract_sender(message)?;
+        self.core.remove_coordinator(sender.namespace())?;
         self.create_null_response_outcome(message, id)
     }
 
@@ -457,6 +466,7 @@ impl<'a> JsonRpcHandler<'a> {
         message: &MessageView,
         id: Id,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        // TODO
         self.create_null_response_outcome(message, id)
     }
 
@@ -465,6 +475,7 @@ impl<'a> JsonRpcHandler<'a> {
         message: &MessageView,
         id: Id,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        // TODO
         self.create_null_response_outcome(message, id)
     }
 
@@ -473,6 +484,7 @@ impl<'a> JsonRpcHandler<'a> {
         message: &MessageView,
         id: Id,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        // TODO
         self.create_null_response_outcome(message, id)
     }
 
@@ -481,6 +493,7 @@ impl<'a> JsonRpcHandler<'a> {
         message: &MessageView,
         id: Id,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        // TODO
         self.create_null_response_outcome(message, id)
     }
 
