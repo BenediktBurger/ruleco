@@ -158,7 +158,7 @@ impl MessagePort for MockAdapter {
         Ok(())
     }
 
-    fn recv(&self, _timeout_ms: u64) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>>{
+    fn recv(&self, _timeout_ms: i64) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>>{
         let mut queue = self.receive_queue_device.borrow_mut();
         Ok(queue.pop_front())
     }

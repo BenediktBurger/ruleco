@@ -36,7 +36,12 @@ impl ZmqAdapter {
         address: &str,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let dealer_socket = self.context.socket(zmq::DEALER)?;
-        dealer_socket.connect(address)?;
+        let connect_address = if address.starts_with("tcp://") {
+            address.to_string()
+        } else {
+            format!("tcp://{}", address)
+        };
+        dealer_socket.connect(&connect_address)?;
         let dealer_identity = ConversationId::new().as_bytes().to_vec();
         self.dealer_sockets
             .insert(dealer_identity.clone(), dealer_socket);
@@ -137,10 +142,9 @@ impl MessagePort for ZmqAdapter {
         Ok(())
     }
 
-    fn recv(&self, timeout_ms: u64) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
-        let timeout_i64 = i64::try_from(timeout_ms).unwrap_or(i64::MAX);
+    fn recv(&self, timeout_ms: i64) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
 
-        if self.poll_router(timeout_i64)? {
+        if self.poll_router(timeout_ms)? {
             Ok(Some(self.receive_from_router()?))
         } else {
             Ok(None)
@@ -174,6 +178,10 @@ impl ConnectionManagementPort for ZmqAdapter {
         Ok(())
     }
 
+    /// Connect to a remote coordinator and return the assigned identity
+    ///
+    /// address: The address of the remote coordinator to connect to (e.g., "tcp://127.0.0.1:5555")
+    /// Returns: The identity assigned to the connection with the remote coordinator
     fn connect_to_coordinator(
         &mut self,
         address: &str,

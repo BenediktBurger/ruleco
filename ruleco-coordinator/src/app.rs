@@ -90,7 +90,7 @@ where
             }
         }
 
-        println!("Coordinator stopped");
+        println!("Coordinator stopped - exiting");
         Ok(())
     }
 
@@ -272,7 +272,9 @@ where
                         }
                     }
                 }
-                JsonRpcOutcome::Shutdown => self.running = false,
+                JsonRpcOutcome::Shutdown => {
+                    self.running = false;
+                }
                 JsonRpcOutcome::AddNodes(addresses) => {
                     for address in addresses {
                         self.connect_to_remote_coordinator(address);

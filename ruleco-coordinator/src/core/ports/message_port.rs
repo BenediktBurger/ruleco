@@ -72,7 +72,7 @@ pub trait MessagePort {
     /// Some((source_context, received_frames)) if a message is available, None on timeout
     fn recv(
         &self,
-        timeout_ms: u64,
+        timeout_ms: i64,
     ) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>>;
 
     /// Receive coordinator sign-in responses

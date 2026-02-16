@@ -502,7 +502,6 @@ _ => {
         message: &MessageView,
         id: Id,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
-        // Create the response message
         let response_message = self.create_null_response(message, id)?;
 
         Ok(vec![
