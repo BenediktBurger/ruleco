@@ -1,5 +1,7 @@
 use jsonrpsee_types::Request;
 use rstest::rstest;
+mod common;
+use common::{components, namespaces};
 use ruleco_coordinator::adapters::{InMemoryDirectoryAdapter, SystemClockAdapter};
 use ruleco_coordinator::core::coordinator_core::CoordinatorCore;
 use ruleco_coordinator::core::domain::{CoordinatorEntry, RoutingError};
@@ -9,42 +11,34 @@ use ruleco_core::full_name::FullName;
 use ruleco_core::message::MessageBuilder;
 use ruleco_core::protocol_constants::MessageType;
 
-static NAMESPACE: &str = "test_namespace";
-static REMOTE_NAMESPACE: &str = "remote_namespace";
 static COMPONENT1_IDENTITY: &[u8] = b"com1";
 static COMPONENT2_IDENTITY: &[u8] = b"com2";
 static DEALER_IDENTITY: &[u8] = b"deal";
 static UNREGISTERED_IDENTITY: &[u8] = b"unregistered";
 
 fn self_name() -> FullName {
-    FullName::from_str(&format!("{}.{}", NAMESPACE, "COORDINATOR")).unwrap()
+    FullName::from_strings(namespaces::N1, namespaces::COORDINATOR_NAME).unwrap()
 }
 
 fn component1_name() -> FullName {
-    FullName::new(NAMESPACE.as_bytes().to_vec(), b"component1".to_vec())
+    FullName::from_strings(namespaces::N1, components::CA).unwrap()
 }
 
 fn component2_name() -> FullName {
-    FullName::new(NAMESPACE.as_bytes().to_vec(), b"component2".to_vec())
+    FullName::from_strings(namespaces::N1, components::CB).unwrap()
 }
 
 fn remote_component_name() -> FullName {
-    FullName::new(
-        REMOTE_NAMESPACE.as_bytes().to_vec(),
-        b"rem_component".to_vec(),
-    )
+    FullName::from_strings(namespaces::N2, components::CC).unwrap()
 }
 
-fn _remote_coordinator_name() -> FullName {
-    FullName::new(
-        REMOTE_NAMESPACE.as_bytes().to_vec(),
-        b"COORDINATOR".to_vec(),
-    )
+fn remote_coordinator_name() -> FullName {
+    FullName::from_strings(namespaces::N2, namespaces::COORDINATOR_NAME).unwrap()
 }
 
 /// Create a default core with reused configuration
 fn create_default_core() -> CoordinatorCore<InMemoryDirectoryAdapter, SystemClockAdapter> {
-    let namespace = NAMESPACE.as_bytes().to_vec();
+    let namespace = namespaces::N1.as_bytes().to_vec();
     let mut directory = InMemoryDirectoryAdapter::new(namespace.clone());
     let clock = SystemClockAdapter::new();
 
@@ -58,7 +52,7 @@ fn create_default_core() -> CoordinatorCore<InMemoryDirectoryAdapter, SystemCloc
 
     // Add a remote coordinator to the directory
     let coordinator = CoordinatorEntry {
-        namespace: REMOTE_NAMESPACE.as_bytes().to_vec(),
+        namespace: namespaces::N2.as_bytes().to_vec(),
         dealer_identity: DEALER_IDENTITY.to_vec(),
         address: "tcp://localhost:5555".to_string(),
     };
@@ -87,10 +81,9 @@ fn test_route_message_from_remote_coordinator_without_validation() {
 
     // Create a message from a remote coordinator's DEALER socket
     // The remote coordinator is NOT signed in as a local component
-    let remote_coordinator = FullName::new(b"remote_coordinator".to_vec(), b"COORDINATOR".to_vec());
     let message = MessageBuilder::new()
         .receiver(component1_name())
-        .sender(remote_coordinator)
+        .sender(remote_coordinator_name())
         .message_type(MessageType::Json.into())
         .payload_single(br#"{"jsonrpc":"2.0","method":"some_method","id":1}"#.to_vec())
         .build()
@@ -117,13 +110,13 @@ fn test_route_message_from_remote_coordinator_without_validation() {
 #[test]
 fn test_message_from_local_component_signed_in_via_dealer() {
     // Setup - core with only coordinator registered, no local components
-    let namespace = NAMESPACE.as_bytes().to_vec();
+    let namespace = namespaces::N1.as_bytes().to_vec();
     let mut directory = InMemoryDirectoryAdapter::new(namespace.clone());
     let clock = SystemClockAdapter::new();
 
     // Add only a remote coordinator
     let coordinator = CoordinatorEntry {
-        namespace: b"remote_coordinator".to_vec(),
+        namespace: namespaces::N2.as_bytes().to_vec(),
         dealer_identity: DEALER_IDENTITY.to_vec(),
         address: "tcp://localhost:5555".to_string(),
     };
@@ -342,7 +335,7 @@ fn test_route_non_sign_in_message_from_unregistered_component_to_coordinator(
     // Assertions
     let full_sender = FullName::from_slice(sender).unwrap();
     let is_from_local_namespace =
-        full_sender.namespace().is_empty() || full_sender.namespace() == NAMESPACE.as_bytes();
+        full_sender.namespace().is_empty() || full_sender.namespace() == namespaces::N1.as_bytes();
 
     if is_from_local_namespace {
         // Local components must be signed in
@@ -371,7 +364,7 @@ fn test_route_non_sign_in_message_from_unregistered_component_to_coordinator(
         let full_receiver = FullName::from_slice(receiver).unwrap();
         let is_to_coordinator = full_receiver.name() == b"COORDINATOR"
             && (!full_receiver.has_namespace()
-                || full_receiver.namespace() == NAMESPACE.as_bytes());
+                || full_receiver.namespace() == namespaces::N1.as_bytes());
 
         if is_to_coordinator {
             match decision {

@@ -1,50 +1,46 @@
-use ruleco_coordinator::app::CoordinatorApp;
-use std::thread;
+//! Legacy integration Test(s)
+//!
+//! This module contains the original integration test that has been
+//! refactored to use the common test helpers.
+//!
+//! Note: The protocol doc at docs/control_protocol.md#signing-in covers sign-in behavior!
+
+mod common;
+use common::{
+    assert_jsonrpc_valid, assert_success_response, components, find_free_port, TestClient,
+    TestCoordinator,
+};
 use std::time::Duration;
-use zmq;
 
-fn find_free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
-}
-
+/// Test coordinator sign-in using the refactored test helpers
+///
+/// This is the original test from integration_test.rs, now using
+/// the TestClient and TestCoordinator helpers from common/mod.rs
 #[test]
-#[ignore]
 fn test_coordinator_sign_in() {
-    let port = find_free_port();
     let namespace = "test_namespace_sign_in";
+    let port = find_free_port();
 
-    let mut coordinator =
-        CoordinatorApp::new(namespace, Some(port), None).expect("Failed to create coordinator");
+    let mut coordinator = TestCoordinator::spawn(namespace, Some(port));
+    let mut client = TestClient::connect(port).expect("Failed to create client");
 
-    let _coordinator_thread = thread::spawn(move || {
-        coordinator.run().expect("Coordinator failed to run");
-    });
+    let response = client
+        .sign_in(components::CA, Some(&coordinator.namespace))
+        .expect("Failed to sign in");
 
-    let context = zmq::Context::new();
-    let client_socket = context.socket(zmq::DEALER).unwrap();
-    client_socket
-        .connect(&format!("tcp://127.0.0.1:{}", port))
-        .expect("Failed to connect client");
+    assert_jsonrpc_valid(&response);
+    assert_success_response(&response);
 
-    let mut retries = 0;
-    let max_retries = 50;
-    loop {
-        let sign_in_request = r#"{"jsonrpc":"2.0","method":"sign_in","id":1}"#;
-        if client_socket.send(sign_in_request, zmq::DONTWAIT).is_ok() {
-            match client_socket.recv_string(zmq::DONTWAIT) {
-                Ok(Ok(response)) => {
-                    if response.contains(r#""result":null"#) {
-                        break;
-                    }
-                }
-                Ok(Err(_)) | Err(_) => {}
-            }
-        }
-        retries += 1;
-        if retries >= max_retries {
-            panic!("Coordinator not ready after {} retries ({}ms)", max_retries, max_retries * 10);
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    // Verify the response contains result:null
+    assert_eq!(
+        response.get("result"),
+        Some(&serde_json::Value::Null),
+        "Response should have null result"
+    );
+
+    client.send_shutdown(None).expect("Failed to send shutdown");
+    std::thread::sleep(Duration::from_millis(500));
+    coordinator
+        .join_thread(Duration::from_secs(5))
+        .expect("Thread did not finish");
 }
