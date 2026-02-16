@@ -215,6 +215,51 @@ impl FullName {
             self.name.clone()
         }
     }
+
+    /// Create a `FullName` from two string slices.
+    ///
+    /// This is a convenience method that directly constructs a FullName
+    /// from namespace and name strings without the overhead of formatting
+    /// and parsing.
+    ///
+    /// # Arguments
+    ///
+    /// * `namespace` - The namespace string (can be empty)
+    /// * `name` - The component name string
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(FullName)` - If both strings are valid
+    /// * `Err(FullNameError)` - If either string contains invalid characters or name is empty
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruleco_core::full_name::{FullName, FullNameError};
+    ///
+    /// let full_name = FullName::from_strings("namespace", "component").unwrap();
+    /// assert_eq!(full_name.namespace(), b"namespace");
+    /// assert_eq!(full_name.name(), b"component");
+    ///
+    /// let full_name = FullName::from_strings("", "component").unwrap();
+    /// assert_eq!(full_name.namespace(), b"");
+    /// assert_eq!(full_name.name(), b"component");
+    ///
+    /// assert_eq!(FullName::from_strings("ns", ""), Err(FullNameError::EmptyPart));
+    /// ```
+    pub fn from_strings(namespace: &str, name: &str) -> Result<Self, FullNameError> {
+        validate_part(namespace.as_bytes())?;
+        validate_part(name.as_bytes())?;
+
+        if name.is_empty() {
+            return Err(FullNameError::EmptyPart);
+        }
+
+        Ok(Self {
+            namespace: namespace.as_bytes().to_vec(),
+            name: name.as_bytes().to_vec(),
+        })
+    }
 }
 
 /// Validate that a name part (namespace or component name) conforms to LECO rules.
@@ -392,5 +437,75 @@ mod test {
         let bytes = full_name.to_vec();
         let full_name2 = FullName::from_slice(&bytes).unwrap();
         assert_eq!(full_name, full_name2);
+    }
+
+    // Tests for from_strings method
+    #[test]
+    fn test_from_strings_with_namespace() {
+        let full_name = FullName::from_strings("namespace", "component").unwrap();
+        assert_eq!(full_name.namespace(), b"namespace");
+        assert_eq!(full_name.name(), b"component");
+        assert!(full_name.has_namespace());
+    }
+
+    #[test]
+    fn test_from_strings_without_namespace() {
+        let full_name = FullName::from_strings("", "component").unwrap();
+        assert_eq!(full_name.namespace(), b"");
+        assert_eq!(full_name.name(), b"component");
+        assert!(!full_name.has_namespace());
+    }
+
+    #[test]
+    fn test_from_strings_empty_name() {
+        let result = FullName::from_strings("namespace", "");
+        assert_eq!(result, Err(FullNameError::EmptyPart));
+    }
+
+    #[test]
+    fn test_from_strings_invalid_character_in_namespace() {
+        let result = FullName::from_strings("ns\x01", "component");
+        assert_eq!(result, Err(FullNameError::InvalidCharacter(0x01)));
+    }
+
+    #[test]
+    fn test_from_strings_invalid_character_in_name() {
+        let result = FullName::from_strings("namespace", "comp\x01onent");
+        assert_eq!(result, Err(FullNameError::InvalidCharacter(0x01)));
+    }
+
+    #[test]
+    fn test_from_strings_valid_characters() {
+        let full_name = FullName::from_strings("ns with space", "component~name").unwrap();
+        assert_eq!(full_name.namespace(), b"ns with space");
+        assert_eq!(full_name.name(), b"component~name");
+    }
+
+    #[test]
+    fn test_from_strings_roundtrip_with_to_vec() {
+        let full_name = FullName::from_strings("test_ns", "test_component").unwrap();
+        let bytes = full_name.to_vec();
+        assert_eq!(bytes, b"test_ns.test_component");
+    }
+
+    #[test]
+    fn test_from_strings_roundtrip_without_namespace() {
+        let full_name = FullName::from_strings("", "standalone").unwrap();
+        let bytes = full_name.to_vec();
+        assert_eq!(bytes, b"standalone");
+    }
+
+    #[test]
+    fn test_from_strings_equivalence_with_from_str() {
+        let from_strings = FullName::from_strings("namespace", "component").unwrap();
+        let from_str = FullName::from_str("namespace.component").unwrap();
+        assert_eq!(from_strings, from_str);
+    }
+
+    #[test]
+    fn test_from_strings_equivalence_without_namespace() {
+        let from_strings = FullName::from_strings("", "component").unwrap();
+        let from_str = FullName::from_str("component").unwrap();
+        assert_eq!(from_strings, from_str);
     }
 }
