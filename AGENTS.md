@@ -12,3 +12,9 @@
 
 - Use imperative mode for comments according to Rust style
 - use `subpackage.rs` instead of `subpackage/mod.rs` for subpackages
+
+## JSON-RPC handling
+
+- Use `jsonrpsee_types` crate for JSON-RPC (prefer [`Request::owned()`](ruleco-coordinator/src/jsonrpc_handler.rs:5)/[`Request::borrowed()`](ruleco-coordinator/src/jsonrpc_handler.rs:5) over `serde_json::json!()`)
+- Use [`Id`](ruleco-coordinator/src/jsonrpc_handler.rs:9) enum for request IDs (supports `Number(u64)`, `Str`, and `Null`)
+- Use [`Response`](ruleco-coordinator/src/jsonrpc_handler.rs:8) and [`ResponsePayload`](ruleco-coordinator/src/jsonrpc_handler.rs:8) for creating responses
