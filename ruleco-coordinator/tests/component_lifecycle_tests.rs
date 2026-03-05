@@ -9,8 +9,8 @@ use std::time::Duration;
 
 mod common;
 use common::{
-    assert_error_response, assert_jsonrpc_valid, assert_success_response, components,
-    find_free_port, namespaces, FixtureBuilder, TestClient, TestCoordinator,
+    assert_error_data, assert_error_response, assert_jsonrpc_valid, assert_success_response,
+    components, find_free_port, namespaces, FixtureBuilder, TestClient, TestCoordinator,
 };
 use rstest::rstest;
 
@@ -57,7 +57,6 @@ fn component_sign_in_success() {
 ///
 /// Protocol: docs/control_protocol.md#signing-in
 /// Error: -32091 - The name is already taken
-#[ignore] // Multi-client test hangs - needs investigation
 #[test]
 fn component_sign_in_duplicate_name() {
     let mut coordinator = TestCoordinator::spawn(namespaces::N1, Some(find_free_port()));
@@ -77,6 +76,7 @@ fn component_sign_in_duplicate_name() {
 
     assert_jsonrpc_valid(&response);
     assert_error_response(&response, -32091);
+    assert_error_data(&response, components::CA);
 
     client1
         .send_shutdown(None)
@@ -96,7 +96,6 @@ fn component_sign_in_duplicate_name() {
 /// 4. Component is removed from local directory
 ///
 /// Protocol: docs/control_protocol.md#signing-out
-#[ignore] // Requires sign_out implementation
 #[test]
 fn component_sign_out_success() {
     let mut coordinator = TestCoordinator::spawn(namespaces::N1, Some(find_free_port()));
@@ -124,7 +123,6 @@ fn component_sign_out_success() {
 /// Tests that the coordinator rejects sign_out from unsigned-in components
 ///
 /// Protocol: docs/control_protocol.md#signing-out
-#[ignore] // Requires sign_out implementation
 #[test]
 fn component_sign_out_without_sign_in() {
     let mut coordinator = TestCoordinator::spawn(namespaces::N1, Some(find_free_port()));
@@ -134,8 +132,14 @@ fn component_sign_out_without_sign_in() {
 
     assert!(result.is_err());
 
+    let mut shutdown_client =
+        TestClient::connect(coordinator.port).expect("Failed to create shutdown client");
+    shutdown_client
+        .sign_in("shutdown_helper", Some(&coordinator.namespace))
+        .expect("Failed to sign in shutdown helper");
+
     coordinator
-        .shutdown(&client)
+        .shutdown(&shutdown_client)
         .expect("Failed to shutdown coordinator");
 }
 
@@ -148,7 +152,6 @@ fn component_sign_out_without_sign_in() {
 /// 4. Coordinator rejects (wrong identity)
 ///
 /// Protocol: docs/control_protocol.md#signing-out
-#[ignore] // Requires sign_out implementation with identity validation
 #[test]
 fn component_sign_out_wrong_identity() {
     let mut coordinator = TestCoordinator::spawn(namespaces::N1, Some(find_free_port()));
@@ -171,13 +174,21 @@ fn component_sign_out_wrong_identity() {
     client2.component_name = Some(components::CA.to_string());
     client2.namespace = Some(namespaces::N1.to_string());
 
-    let result = client2.sign_out();
+    let response = client2.sign_out().expect("Should receive response");
 
-    // Should fail because identity doesn't match
-    assert!(result.is_err());
+    // Should receive error response because identity doesn't match
+    // Routing layer catches this before handler runs, returns duplicate_name error
+    assert_error_response(&response, -32091);
+    assert_error_data(&response, components::CA);
 
+    // Use a new client to shutdown (client2 can't shutdown because it's not authenticated)
+    let mut shutdown_client =
+        TestClient::connect(coordinator.port).expect("Failed to create shutdown client");
+    shutdown_client
+        .sign_in("shutdown_helper", Some(&coordinator.namespace))
+        .expect("Failed to sign in shutdown helper");
     coordinator
-        .shutdown(&client2)
+        .shutdown(&shutdown_client)
         .expect("Failed to shutdown coordinator");
 }
 

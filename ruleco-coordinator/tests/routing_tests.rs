@@ -10,8 +10,8 @@ mod common;
 use std::collections::HashMap;
 
 use common::{
-    assert_error_response, assert_jsonrpc_valid, assert_success_response, components,
-    find_free_port, namespaces, TestClient, TestCoordinator,
+    assert_error_data, assert_error_response, assert_jsonrpc_valid, assert_success_response,
+    components, find_free_port, namespaces, TestClient, TestCoordinator,
 };
 use jsonrpsee_types::{Id, Response, ResponsePayload};
 use ruleco_coordinator::core::parameter_types::AddNodesParams;
@@ -127,7 +127,6 @@ fn route_from_unregistered_component() {
 
     let mut client = TestClient::connect(coordinator.port).expect("Failed to create client");
 
-    // Don't sign in, try to send message directly
     let _ = client.send_jsonrpc_request("test_method", None, Some(1), None);
 
     let response = client
@@ -136,6 +135,7 @@ fn route_from_unregistered_component() {
 
     assert_jsonrpc_valid(&response);
     assert_error_response(&response, LecoError::not_signed_in(None).code());
+    assert_error_data(&response, "unknown");
 
     client
         .sign_in(components::CA, Some(&coordinator.namespace))
@@ -178,6 +178,7 @@ fn route_to_unknown_receiver() {
 
     assert_jsonrpc_valid(&response);
     assert_error_response(&response, LecoError::receiver_unknown(None).code());
+    assert_error_data(&response, &format!("{}.{}", namespaces::N1, components::CB));
 
     client_ca
         .send_shutdown(None)
@@ -220,6 +221,7 @@ fn route_to_unknown_node() {
 
     assert_jsonrpc_valid(&response);
     assert_error_response(&response, LecoError::node_unknown(None).code());
+    assert_error_data(&response, namespaces::N2);
 
     client_ca
         .send_shutdown(None)
@@ -282,7 +284,6 @@ fn route_message_with_partial_receiver_name() {
 ///
 /// Protocol: docs/control_protocol.md#communication-with-other-components (Example 2)
 #[test]
-#[ignore = "Back channel does not work yet"]
 fn route_cross_coordinator() {
     let mut coordinator_n1 = TestCoordinator::spawn(namespaces::N1, Some(find_free_port()));
     let mut coordinator_n2 = TestCoordinator::spawn(namespaces::N2, Some(find_free_port()));

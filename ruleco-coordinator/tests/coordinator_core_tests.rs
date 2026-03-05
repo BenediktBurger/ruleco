@@ -10,6 +10,7 @@ use ruleco_coordinator::core::ports::{DirectoryPort, RoutingPort};
 use ruleco_core::full_name::FullName;
 use ruleco_core::message::MessageBuilder;
 use ruleco_core::protocol_constants::MessageType;
+use serde_json::Value;
 
 static COMPONENT1_IDENTITY: &[u8] = b"com1";
 static COMPONENT2_IDENTITY: &[u8] = b"com2";
@@ -55,10 +56,16 @@ fn create_default_core() -> CoordinatorCore<InMemoryDirectoryAdapter, SystemCloc
         namespace: namespaces::N2.as_bytes().to_vec(),
         dealer_identity: DEALER_IDENTITY.to_vec(),
         address: "tcp://localhost:5555".to_string(),
+        last_seen: std::time::Instant::now(),
     };
     directory.register_coordinator(coordinator).unwrap();
 
-    let core = CoordinatorCore::new(namespace, directory, clock);
+    let core = CoordinatorCore::new(
+        namespace,
+        "tcp://127.0.0.1:12300".to_string(),
+        directory,
+        clock,
+    );
     core
 }
 
@@ -119,10 +126,16 @@ fn test_message_from_local_component_signed_in_via_dealer() {
         namespace: namespaces::N2.as_bytes().to_vec(),
         dealer_identity: DEALER_IDENTITY.to_vec(),
         address: "tcp://localhost:5555".to_string(),
+        last_seen: std::time::Instant::now(),
     };
     directory.register_coordinator(coordinator).unwrap();
 
-    let core = CoordinatorCore::new(namespace, directory, clock);
+    let core = CoordinatorCore::new(
+        namespace,
+        "tcp://127.0.0.1:12300".to_string(),
+        directory,
+        clock,
+    );
 
     // Create a message from a local component that came via DEALER (shouldn't happen but test the case)
     // This message will NOT be validated because it's from a DEALER socket!
@@ -388,4 +401,238 @@ fn test_route_non_sign_in_message_from_unregistered_component_to_coordinator(
             }
         }
     }
+}
+
+#[test]
+fn test_handle_coordinator_sign_in_success_registers_coordinator() {
+    let namespace = namespaces::N1.as_bytes().to_vec();
+    let directory = InMemoryDirectoryAdapter::new(namespace.clone());
+    let clock = SystemClockAdapter::new();
+
+    let mut core = CoordinatorCore::new(
+        namespace,
+        "tcp://127.0.0.1:12300".to_string(),
+        directory,
+        clock,
+    );
+
+    core.handle_sign_in(component1_name(), COMPONENT1_IDENTITY)
+        .unwrap();
+
+    let dealer_identity = b"dealer123";
+    let remote_coordinator_name =
+        FullName::from_strings(namespaces::N2, namespaces::COORDINATOR_NAME).unwrap();
+    let address = "tcp://127.0.0.1:12301".to_string();
+
+    let (_entry, _messages) = core
+        .handle_coordinator_sign_in_success(
+            dealer_identity,
+            remote_coordinator_name.clone(),
+            address,
+        )
+        .unwrap();
+
+    let remote_component = FullName::from_strings(namespaces::N2, "SomeComponent").unwrap();
+    let message = MessageBuilder::new()
+        .receiver(remote_component)
+        .sender(component1_name())
+        .build()
+        .unwrap();
+
+    let decision = core.route_message(
+        &message.to_view().unwrap(),
+        &local_identity(COMPONENT1_IDENTITY),
+    );
+
+    match decision {
+        Ok(Identity::Coordinator { identity }) => {
+            assert_eq!(identity.as_slice(), dealer_identity);
+        }
+        _ => panic!("Expected Coordinator routing decision, got {:?}", decision),
+    }
+}
+
+#[test]
+fn test_handle_coordinator_sign_in_success_returns_entry_and_messages() {
+    let namespace = namespaces::N1.as_bytes().to_vec();
+    let directory = InMemoryDirectoryAdapter::new(namespace.clone());
+    let clock = SystemClockAdapter::new();
+
+    let mut core = CoordinatorCore::new(
+        namespace,
+        "tcp://127.0.0.1:12300".to_string(),
+        directory,
+        clock,
+    );
+
+    core.handle_sign_in(component1_name(), COMPONENT1_IDENTITY)
+        .unwrap();
+
+    let dealer_identity = b"dealer123";
+    let remote_coordinator_name =
+        FullName::from_strings(namespaces::N2, namespaces::COORDINATOR_NAME).unwrap();
+    let address = "tcp://127.0.0.1:12301".to_string();
+
+    let result = core.handle_coordinator_sign_in_success(
+        dealer_identity,
+        remote_coordinator_name.clone(),
+        address,
+    );
+
+    assert!(result.is_ok());
+    let (entry, messages) = result.unwrap();
+
+    assert_eq!(entry.namespace, namespaces::N2.as_bytes());
+    assert_eq!(entry.dealer_identity, dealer_identity.to_vec());
+    assert_eq!(entry.address, "tcp://127.0.0.1:12301");
+
+    assert_eq!(messages.len(), 2);
+}
+
+#[test]
+fn test_handle_coordinator_sign_in_success_record_components_message() {
+    let namespace = namespaces::N1.as_bytes().to_vec();
+    let mut directory = InMemoryDirectoryAdapter::new(namespace.clone());
+    let clock = SystemClockAdapter::new();
+
+    directory
+        .register_component(component1_name(), COMPONENT1_IDENTITY)
+        .unwrap();
+
+    let mut core = CoordinatorCore::new(
+        namespace,
+        "tcp://127.0.0.1:12300".to_string(),
+        directory,
+        clock,
+    );
+
+    let dealer_identity = b"dealer123";
+    let remote_coordinator_name =
+        FullName::from_strings(namespaces::N2, namespaces::COORDINATOR_NAME).unwrap();
+    let address = "tcp://127.0.0.1:12301".to_string();
+
+    let (_entry, messages) = core
+        .handle_coordinator_sign_in_success(
+            dealer_identity,
+            remote_coordinator_name.clone(),
+            address,
+        )
+        .unwrap();
+
+    let record_components_msg = &messages[1];
+    assert_eq!(
+        record_components_msg.sender().as_ref().unwrap().namespace(),
+        namespaces::N1.as_bytes()
+    );
+    assert_eq!(
+        record_components_msg
+            .receiver()
+            .as_ref()
+            .unwrap()
+            .namespace(),
+        namespaces::N2.as_bytes()
+    );
+
+    let content = record_components_msg.content_frame().unwrap();
+    let request: Request = serde_json::from_slice(content).unwrap();
+    assert_eq!(request.method_name(), "record_components");
+
+    let params = request.params();
+    let params_value: Value = serde_json::from_str(params.as_str().unwrap()).unwrap();
+    let components = params_value["components"].as_array().unwrap();
+    assert_eq!(components.len(), 1);
+    assert!(components.contains(&Value::String(format!(
+        "{}.{}",
+        namespaces::N1,
+        components::CA
+    ))));
+}
+
+#[test]
+fn test_coordinator_sign_out_removes_coordinator() {
+    let namespace = namespaces::N1.as_bytes().to_vec();
+    let directory = InMemoryDirectoryAdapter::new(namespace.clone());
+    let clock = SystemClockAdapter::new();
+
+    let mut core = CoordinatorCore::new(
+        namespace,
+        "tcp://127.0.0.1:12300".to_string(),
+        directory,
+        clock,
+    );
+
+    let dealer_identity = b"dealer123";
+    let remote_coordinator_name =
+        FullName::from_strings(namespaces::N2, namespaces::COORDINATOR_NAME).unwrap();
+    let address = "tcp://127.0.0.1:12301".to_string();
+
+    let _ = core
+        .handle_coordinator_sign_in_success(
+            dealer_identity,
+            remote_coordinator_name.clone(),
+            address,
+        )
+        .unwrap();
+
+    assert!(core.is_coordinator_registered(namespaces::N2.as_bytes()));
+
+    let stored_identity = core
+        .get_coordinator_dealer_identity(namespaces::N2.as_bytes())
+        .unwrap();
+    assert_eq!(stored_identity.as_slice(), dealer_identity);
+
+    let result = core.remove_coordinator(namespaces::N2.as_bytes());
+
+    assert!(result.is_ok());
+    assert!(!core.is_coordinator_registered(namespaces::N2.as_bytes()));
+}
+
+#[test]
+fn test_coordinator_sign_out_wrong_identity_detected() {
+    let namespace = namespaces::N1.as_bytes().to_vec();
+    let directory = InMemoryDirectoryAdapter::new(namespace.clone());
+    let clock = SystemClockAdapter::new();
+
+    let mut core = CoordinatorCore::new(
+        namespace,
+        "tcp://127.0.0.1:12300".to_string(),
+        directory,
+        clock,
+    );
+
+    let dealer_identity = b"dealer123";
+    let remote_coordinator_name =
+        FullName::from_strings(namespaces::N2, namespaces::COORDINATOR_NAME).unwrap();
+    let address = "tcp://127.0.0.1:12301".to_string();
+
+    let _ = core
+        .handle_coordinator_sign_in_success(
+            dealer_identity,
+            remote_coordinator_name.clone(),
+            address,
+        )
+        .unwrap();
+
+    let stored_identity = core
+        .get_coordinator_dealer_identity(namespaces::N2.as_bytes())
+        .unwrap();
+    assert_ne!(stored_identity.as_slice(), b"wrong_dealer");
+
+    assert!(core.is_coordinator_registered(namespaces::N2.as_bytes()));
+}
+
+#[test]
+fn test_coordinator_sign_out_not_registered() {
+    let namespace = namespaces::N1.as_bytes().to_vec();
+    let directory = InMemoryDirectoryAdapter::new(namespace.clone());
+    let clock = SystemClockAdapter::new();
+
+    let core = CoordinatorCore::new(
+        namespace,
+        "tcp://127.0.0.1:12300".to_string(),
+        directory,
+        clock,
+    );
+
+    assert!(!core.is_coordinator_registered(namespaces::N2.as_bytes()));
 }

@@ -17,6 +17,7 @@ struct MockDirectory {
     namespace: Vec<u8>,
     local_components: std::collections::HashMap<FullName, ComponentEntry>,
     coordinators: std::collections::HashMap<Vec<u8>, CoordinatorEntry>,
+    remote_components: std::collections::HashMap<Vec<u8>, Vec<FullName>>,
 }
 
 impl MockDirectory {
@@ -25,6 +26,7 @@ impl MockDirectory {
             namespace,
             local_components: std::collections::HashMap::new(),
             coordinators: std::collections::HashMap::new(),
+            remote_components: std::collections::HashMap::new(),
         }
     }
 
@@ -129,6 +131,50 @@ impl DirectoryPort for MockDirectory {
             Err(Error::not_signed_in())
         }
     }
+
+    fn add_remote_components(
+        &mut self,
+        namespace: Vec<u8>,
+        components: Vec<FullName>,
+    ) -> Result<(), Error> {
+        self.remote_components.insert(namespace, components);
+        Ok(())
+    }
+
+    fn get_remote_components(&self, namespace: &[u8]) -> Result<Vec<FullName>, Error> {
+        self.remote_components
+            .get(namespace)
+            .cloned()
+            .ok_or_else(|| Error::node_unknown_with_data(serde_json::Value::Null))
+    }
+
+    fn remove_remote_components(&mut self, namespace: &[u8]) -> Result<(), Error> {
+        self.remote_components.remove(namespace);
+        Ok(())
+    }
+
+    fn get_all_global_components(
+        &self,
+    ) -> Result<std::collections::HashMap<Vec<u8>, Vec<FullName>>, Error> {
+        Ok(self.remote_components.clone())
+    }
+
+    fn update_coordinator_last_seen(
+        &mut self,
+        namespace: &[u8],
+        last_seen: Instant,
+    ) -> Result<(), Error> {
+        if let Some(coordinator) = self.coordinators.get_mut(namespace) {
+            coordinator.last_seen = last_seen;
+            Ok(())
+        } else {
+            Err(Error::node_unknown())
+        }
+    }
+
+    fn get_all_coordinators_mut(&mut self) -> Vec<&mut CoordinatorEntry> {
+        self.coordinators.values_mut().collect()
+    }
 }
 
 // Mock implementation of the clock port
@@ -168,7 +214,12 @@ mod tests {
 
         // Create coordinator with mocked dependencies
         let namespace = b"test_ns".to_vec();
-        let core = CoordinatorCore::new(namespace, mock_directory, mock_clock);
+        let core = CoordinatorCore::new(
+            namespace,
+            "tcp://127.0.0.1:12300".to_string(),
+            mock_directory,
+            mock_clock,
+        );
 
         // Create a test message
         let message = MessageBuilder::new()

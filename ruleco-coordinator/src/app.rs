@@ -1,6 +1,7 @@
 use crate::adapters::{InMemoryDirectoryAdapter, SystemClockAdapter, ZmqAdapter};
-use crate::core::domain::RoutingError;
+use crate::core::domain::{CoordinatorEntry, RoutingError};
 use crate::core::pending_connections::PendingConnections;
+use crate::core::ports::clock_port::ClockPort;
 use crate::core::ports::message_port::Identity;
 use crate::core::ports::routing_port::RoutingPort;
 use crate::core::ports::{ConnectionManagementPort, MessagePort};
@@ -21,6 +22,8 @@ pub struct CoordinatorApp<T = ZmqAdapter> {
     adapter: T,
     /// Our name as a FullName
     name: FullName,
+    /// Our public address (e.g., "tcp://192.168.1.100:12300")
+    address: String,
     /// Flag to indicate if the coordinator is running
     running: bool,
     /// Track pending coordinator connections
@@ -36,7 +39,21 @@ impl CoordinatorApp<ZmqAdapter> {
         let timeout_interval = timeout_interval.unwrap_or(10);
         let mut zmq_adapter = ZmqAdapter::new()?;
         zmq_adapter.listen_for_components(&format!("tcp://*:{}", &port))?;
-        Self::new_with_adapter(namespace, zmq_adapter, timeout_interval)
+        let address = format!("tcp://127.0.0.1:{}", &port);
+        Self::new_with_adapter(namespace, address, zmq_adapter, timeout_interval)
+    }
+
+    /// Create a new coordinator application with custom bind and public addresses
+    pub fn new_with_addresses(
+        namespace: &str,
+        bind_address: &str,
+        public_address: &str,
+        timeout_interval: Option<u64>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let timeout_interval = timeout_interval.unwrap_or(10);
+        let mut zmq_adapter = ZmqAdapter::new()?;
+        zmq_adapter.listen_for_components(bind_address)?;
+        Self::new_with_adapter(namespace, public_address.to_string(), zmq_adapter, timeout_interval)
     }
 }
 
@@ -47,6 +64,7 @@ where
     /// Create a new coordinator application with a specific adapter
     pub fn new_with_adapter(
         namespace: &str,
+        address: String,
         adapter: T,
         timeout_interval: u64,
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -56,12 +74,13 @@ where
         let name = FullName::new(namespace_bytes, b"COORDINATOR".to_vec());
 
         let core =
-            CoordinatorCore::new(name.namespace().to_vec(), directory_adapter, clock_adapter);
+            CoordinatorCore::new(name.namespace().to_vec(), address.clone(), directory_adapter, clock_adapter);
 
         Ok(Self {
             core,
             adapter,
             name,
+            address,
             running: false,
             pending_connections: PendingConnections::new(),
             timeout_interval,
@@ -74,8 +93,10 @@ where
         println!("Coordinator started");
 
         while self.running {
-            // TODO handle timeout by sending RPC request for pong method and later removing it.
-            let _ = self.core.check_timeouts(Duration::from_secs(self.timeout_interval));
+            let timed_out = self.core.check_timeouts(Duration::from_secs(self.timeout_interval));
+            if !timed_out.is_empty() {
+                let _ = self.core.remove_timed_out_components(&timed_out);
+            }
 
             let timeout_duration = Duration::from_secs(self.timeout_interval);
             let timed_out = self.pending_connections.check_timeouts(timeout_duration);
@@ -84,7 +105,16 @@ where
                 let _ = self.adapter.disconnect_from_coordinator(&dealer_identity);
             }
 
-            // Poll for messages with a timeout
+            let timed_out_coordinators = self.core.check_coordinator_timeouts(timeout_duration);
+            if !timed_out_coordinators.is_empty() {
+                for ns in &timed_out_coordinators {
+                    if let Ok(dealer_id) = self.core.get_coordinator_dealer_identity(ns) {
+                        let _ = self.adapter.disconnect_from_coordinator(&dealer_id);
+                    }
+                }
+                let _ = self.core.remove_timed_out_coordinators(&timed_out_coordinators);
+            }
+
             if let Err(e) = self.poll_and_process_messages() {
                 eprintln!("Error processing messages: {}", e);
             }
@@ -92,6 +122,16 @@ where
 
         println!("Coordinator stopped - exiting");
         Ok(())
+    }
+
+    /// Request the coordinator to stop
+    pub fn stop(&mut self) {
+        self.running = false;
+    }
+
+    /// Get the coordinator's public address
+    pub fn address(&self) -> &str {
+        &self.address
     }
 
     /// Poll for messages and process them
@@ -104,7 +144,7 @@ where
             }
         }
 
-        if !self.pending_connections.is_empty() {
+        if !self.pending_connections.is_empty() || self.core.has_remote_coordinators() {
             let coordinator_msgs = self.adapter.recv_coordinator_sign_ins()?;
             for (sender_identity, frames) in coordinator_msgs {
                 if let Err(e) = self.process_raw_message(sender_identity, frames) {
@@ -139,6 +179,14 @@ where
         sender_identity: Identity,
         message: MessageView,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(sender) = message.sender() {
+            if sender.namespace() == self.name.namespace() || sender.namespace().is_empty() {
+                let _ = self.core.update_component_last_seen(&sender);
+            } else if sender.name() == b"COORDINATOR" {
+                let _ = self.core.update_coordinator_last_seen(sender.namespace());
+            }
+        }
+
         let result = self.core.route_message(&message, &sender_identity);
 
         match result {
@@ -170,6 +218,34 @@ where
         coordinator_name: FullName,
         message: &MessageView,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let dealer_identity = match &sender_identity {
+            Identity::Coordinator { identity } | Identity::Component { identity } => identity.clone(),
+            Identity::SelfTarget => {
+                return Ok(());
+            }
+        };
+
+        let coordinator_entry = CoordinatorEntry {
+            namespace: coordinator_name.namespace().to_vec(),
+            dealer_identity: dealer_identity.clone(),
+            address: String::new(),
+            last_seen: self.core.clock().now(),
+        };
+
+        if let Err(e) = self.core.register_coordinator(coordinator_entry) {
+            let error_response = {
+                let handler = JsonRpcHandler::new(&mut self.core, &self.name);
+                handler.create_error_response(
+                    &coordinator_name,
+                    jsonrpsee_types::Id::Null,
+                    &e,
+                    Some(message.header().conversation_id.clone()),
+                )?
+            };
+            self.adapter.send(&sender_identity, error_response.into_raw_frames())?;
+            return Ok(());
+        }
+
         let response = {
             let handler = JsonRpcHandler::new(&mut self.core, &self.name);
             handler.create_json_response(
@@ -179,14 +255,7 @@ where
                 Some(message.header().conversation_id.clone()),
             )?
         };
-        match &sender_identity {
-            Identity::SelfTarget => {
-                return Ok(());
-            }
-            _ => {
-                self.adapter.send(&sender_identity, response.into_raw_frames())?;
-            }
-        }
+        self.adapter.send(&sender_identity, response.into_raw_frames())?;
         Ok(())
     }
 
@@ -234,19 +303,30 @@ where
                     return Ok(());
                 }
 
-                if let Err(e) = self.core.handle_coordinator_sign_in_success(
+                match self.core.handle_coordinator_sign_in_success(
                     &sender_identity_bytes,
                     sender_name.clone(),
                     conn_info.address.clone(),
                 ) {
-                    eprintln!("Error handling coordinator sign-in success: {}", e);
-                    self.pending_connections.complete_connection(&sender_identity_bytes);
-                    let _ = self
-                        .adapter
-                        .disconnect_from_coordinator(&sender_identity_bytes);
-                } else {
-                    self.pending_connections.complete_connection(&sender_identity_bytes);
-                    return Ok(());
+                    Ok((_entry, messages)) => {
+                        self.pending_connections.complete_connection(&sender_identity_bytes);
+                        for msg in messages {
+                            self.adapter.send(
+                                &Identity::Coordinator {
+                                    identity: sender_identity_bytes.clone(),
+                                },
+                                msg.into_raw_frames(),
+                            )?;
+                        }
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        eprintln!("Error handling coordinator sign-in success: {}", e);
+                        self.pending_connections.complete_connection(&sender_identity_bytes);
+                        let _ = self
+                            .adapter
+                            .disconnect_from_coordinator(&sender_identity_bytes);
+                    }
                 }
             }
         }
@@ -278,6 +358,16 @@ where
                 JsonRpcOutcome::AddNodes(addresses) => {
                     for address in addresses {
                         self.connect_to_remote_coordinator(address);
+                    }
+                }
+                JsonRpcOutcome::DirectorySync(messages) => {
+                    for msg in messages {
+                        if let Ok(receiver) = msg.receiver() {
+                            let target_identity = Identity::Coordinator {
+                                identity: self.core.get_coordinator_dealer_identity(receiver.namespace())?,
+                            };
+                            self.adapter.send(&target_identity, msg.into_raw_frames())?;
+                        }
                     }
                 }
                 JsonRpcOutcome::NoAction => {}
@@ -424,8 +514,9 @@ mod tests {
     /// Contains already two Components and a Coordinator configured.
     fn create_default_app() -> CoordinatorApp<MockAdapter> {
         let mock_adapter = MockAdapter::new();
-        let mut app = CoordinatorApp::new_with_adapter(NAMESPACE, mock_adapter, 10)
-            .expect("Failed to create CoordinatorApp");
+        let mut app =
+            CoordinatorApp::new_with_adapter(NAMESPACE, "tcp://127.0.0.1:12300".to_string(), mock_adapter, 10)
+                .expect("Failed to create CoordinatorApp");
 
         // Sign in the components
         app.core
@@ -444,7 +535,8 @@ mod tests {
         let namespace = NAMESPACE;
         let mock_adapter = MockAdapter::new();
         let mut app =
-            CoordinatorApp::new_with_adapter(namespace, mock_adapter, 10).expect("Failed to create CoordinatorApp");
+            CoordinatorApp::new_with_adapter(namespace, "tcp://127.0.0.1:12300".to_string(), mock_adapter, 10)
+                .expect("Failed to create CoordinatorApp");
         let identity = vec![1, 2, 3, 4];
 
         let sender_name = FullName::new(b"test_namespace".to_vec(), b"sender".to_vec());
@@ -550,9 +642,19 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // not yet implemented, as there is no coordinator log in.
     fn test_process_message_from_local_to_remote() {
         let mut app = create_default_app();
+        
+        let coordinator_entry = crate::core::domain::CoordinatorEntry {
+            namespace: REMOTE_NAMESPACE.as_bytes().to_vec(),
+            dealer_identity: DEALER_IDENTITY.to_vec(),
+            address: String::new(),
+            last_seen: std::time::Instant::now(),
+        };
+        app.core
+            .register_coordinator(coordinator_entry)
+            .expect("Failed to register remote coordinator");
+
         let message = MessageBuilder::new()
             .sender(component1_name())
             .receiver(
@@ -569,13 +671,25 @@ mod tests {
             },
             message.clone(),
         );
-        assert!(result.is_ok());
+        
+        let sent_to_remote = app.adapter.get_sent_to_remote();
+        let sent_to_local = app.adapter.get_sent_to_local();
+        let all_sent = app.adapter.get_all_sent_messages();
+        
+        if !result.is_ok() {
+            panic!("process_message failed: {:?}", result);
+        }
+        if sent_to_remote.len() != 1 {
+            panic!(
+                "Expected 1 message sent to remote, got {}.\nSent to local: {}\nAll sent: {:?}",
+                sent_to_remote.len(),
+                sent_to_local.len(),
+                all_sent.iter().map(|(id, _)| format!("{:?}", id)).collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(sent_to_remote[0].0, DEALER_IDENTITY.to_vec());
 
-        let sent_messages = app.adapter.get_sent_to_remote();
-        assert_eq!(sent_messages.len(), 1);
-        assert_eq!(sent_messages[0].0, DEALER_IDENTITY.to_vec());
-
-        assert_messages_are_equal(&sent_messages[0].1, &message);
+        assert_messages_are_equal(&sent_to_remote[0].1, &message);
     }
 
     #[test]

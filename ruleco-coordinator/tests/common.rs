@@ -133,17 +133,20 @@ where
 {
     let start = Instant::now();
 
-    while start.elapsed() < timeout {
+    loop {
         if thread.is_finished() {
             let inner_result = thread
                 .join()
                 .map_err(|e| format!("Thread panicked: {:?}", e))?;
             return inner_result.map_err(|e| e.to_string());
         }
-        thread::sleep(Duration::from_millis(10));
-    }
 
-    Err(String::from("Thread did not finish within timeout"))
+        if start.elapsed() >= timeout {
+            return Err(String::from("Thread did not finish within timeout"));
+        }
+
+        thread::sleep(Duration::from_millis(1));
+    }
 }
 
 impl Drop for TestCoordinator {
@@ -462,6 +465,58 @@ pub fn assert_error_response(response: &Value, expected_code: i32) {
         "Expected error code {}, got {}",
         expected_code, code
     );
+}
+
+/// Assert that a JSON-RPC error response contains expected data field
+pub fn assert_error_data(response: &Value, expected_data: &str) {
+    let error = response
+        .get("error")
+        .expect("Response should contain 'error'");
+    let data = error
+        .get("data")
+        .and_then(|d| d.as_str())
+        .expect("Error should have 'data' field as string");
+
+    assert!(
+        data.contains(expected_data),
+        "Expected error data to contain '{}', got '{}'",
+        expected_data,
+        data
+    );
+}
+
+/// Poll for a condition to be true with timeout
+pub fn wait_for_condition<F>(
+    mut condition: F,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> Result<(), String>
+where
+    F: FnMut() -> bool,
+{
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if condition() {
+            return Ok(());
+        }
+        thread::sleep(poll_interval);
+    }
+    Err(format!("Condition not met within {:?}", timeout))
+}
+
+/// Wait for coordinator to be ready by polling with ping
+pub fn wait_for_coordinator(
+    client: &TestClient,
+    max_attempts: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for attempt in 0..max_attempts {
+        let _ = client.send_jsonrpc_request("pong", None, Some(attempt as u64), None);
+        if client.receive_jsonrpc_response(100).is_ok() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    Err(format!("Coordinator not ready after {} attempts", max_attempts).into())
 }
 
 /// Assert that JSON-RPC 2.0 requirements are met

@@ -17,6 +17,15 @@ pub struct ZmqAdapter {
     dealer_sockets: std::collections::HashMap<Vec<u8>, zmq::Socket>,
 }
 
+impl Drop for ZmqAdapter {
+    fn drop(&mut self) {
+        let _ = self.router_socket.set_linger(0);
+        for socket in self.dealer_sockets.values() {
+            let _ = socket.set_linger(0);
+        }
+    }
+}
+
 impl ZmqAdapter {
     /// Create a new ZMQ adapter
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
@@ -41,8 +50,9 @@ impl ZmqAdapter {
         } else {
             format!("tcp://{}", address)
         };
-        dealer_socket.connect(&connect_address)?;
         let dealer_identity = ConversationId::new().as_bytes().to_vec();
+        dealer_socket.set_identity(&dealer_identity)?;
+        dealer_socket.connect(&connect_address)?;
         self.dealer_sockets
             .insert(dealer_identity.clone(), dealer_socket);
         Ok(dealer_identity)
@@ -53,7 +63,9 @@ impl ZmqAdapter {
         &mut self,
         dealer_identity: &[u8],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.dealer_sockets.remove(dealer_identity);
+        if let Some(socket) = self.dealer_sockets.remove(dealer_identity) {
+            drop(socket);
+        }
         Ok(())
     }
 
@@ -132,7 +144,8 @@ impl MessagePort for ZmqAdapter {
                 if let Some(socket) = self.dealer_sockets.get(identity) {
                     socket.send_multipart(frames, 0)?;
                 } else {
-                    return Err("Coordinator connection not found".into());
+                    self.router_socket.send(identity, zmq::SNDMORE)?;
+                    self.router_socket.send_multipart(frames, 0)?;
                 }
             }
             Identity::SelfTarget => {
@@ -142,8 +155,10 @@ impl MessagePort for ZmqAdapter {
         Ok(())
     }
 
-    fn recv(&self, timeout_ms: i64) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
-
+    fn recv(
+        &self,
+        timeout_ms: i64,
+    ) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
         if self.poll_router(timeout_ms)? {
             Ok(Some(self.receive_from_router()?))
         } else {
@@ -162,7 +177,12 @@ impl MessagePort for ZmqAdapter {
                 let dealer_id = &dealer_ids[index - 1];
                 if let Some(socket) = self.dealer_sockets.get(dealer_id) {
                     if let Ok(frames) = self.receive_from_dealer(socket) {
-                        messages.push((Identity::Coordinator { identity: dealer_id.clone() }, frames));
+                        messages.push((
+                            Identity::Coordinator {
+                                identity: dealer_id.clone(),
+                            },
+                            frames,
+                        ));
                     }
                 }
             }

@@ -1,6 +1,7 @@
 use crate::core::domain::{ComponentEntry, CoordinatorEntry};
 use ruleco_core::errors::Error;
 use ruleco_core::full_name::FullName;
+use std::collections::HashMap;
 use std::time::Instant;
 
 /// Interface for directory management operations
@@ -63,4 +64,32 @@ pub trait DirectoryPort {
         name: FullName,
         last_seen: Instant,
     ) -> Result<(), Error>;
+
+    // Global directory methods
+
+    /// Add components from a remote namespace to the global directory
+    fn add_remote_components(
+        &mut self,
+        namespace: Vec<u8>,
+        components: Vec<FullName>,
+    ) -> Result<(), Error>;
+
+    /// Get all components from a remote namespace
+    fn get_remote_components(&self, namespace: &[u8]) -> Result<Vec<FullName>, Error>;
+
+    /// Remove all components from a remote namespace
+    fn remove_remote_components(&mut self, namespace: &[u8]) -> Result<(), Error>;
+
+    /// Get all global components across all remote namespaces
+    fn get_all_global_components(&self) -> Result<HashMap<Vec<u8>, Vec<FullName>>, Error>;
+
+    /// Update the last seen time for a remote coordinator
+    fn update_coordinator_last_seen(
+        &mut self,
+        namespace: &[u8],
+        last_seen: Instant,
+    ) -> Result<(), Error>;
+
+    /// Get all coordinators (mutable for updating last_seen)
+    fn get_all_coordinators_mut(&mut self) -> Vec<&mut CoordinatorEntry>;
 }

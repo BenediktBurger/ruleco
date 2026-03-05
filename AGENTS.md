@@ -18,3 +18,25 @@
 - Use `jsonrpsee_types` crate for JSON-RPC (prefer [`Request::owned()`](ruleco-coordinator/src/jsonrpc_handler.rs:5)/[`Request::borrowed()`](ruleco-coordinator/src/jsonrpc_handler.rs:5) over `serde_json::json!()`)
 - Use [`Id`](ruleco-coordinator/src/jsonrpc_handler.rs:9) enum for request IDs (supports `Number(u64)`, `Str`, and `Null`)
 - Use [`Response`](ruleco-coordinator/src/jsonrpc_handler.rs:8) and [`ResponsePayload`](ruleco-coordinator/src/jsonrpc_handler.rs:8) for creating responses
+
+## Instructions
+
+- Use the orchestrator skill process: planner → implementer → reviewer loop for each phase
+- Follow TDD (Test-Driven Development): write tests before/with implementation
+- Follow ruleco architecture patterns: hexagonal architecture (Core → Ports → Adapters)
+- Use `jsonrpsee_types` for JSON-RPC, MessageBuilder/MessageView for messages
+
+## Relevant files / directories
+
+- `/home/benediktb/Repositories/ruleco/docs/control_protocol.md` - Protocol specification
+- `/home/benediktb/Repositories/ruleco/ruleco-coordinator/src/jsonrpc_handler.rs` - JSON-RPC handlers including `handle_remove_expired_addresses`
+- `/home/benediktb/Repositories/ruleco/ruleco-coordinator/src/core/parameter_types.rs` - Parameter types including `RemoveExpiredAddressesParams`
+
+## Next steps
+
+1. Phase 6 complete - all implementable tests passing
+2. Remaining 3 ignored tests require heartbeat/timeout infrastructure:
+   - Active background task for periodic timeout checking
+   - Coordinator-initiated ping mechanism
+   - Bidirectional coordinator timeout detection
+3. These features are documented as TODO in app.rs:77
