@@ -11,8 +11,8 @@ use std::time::Duration;
 
 mod common;
 use common::{
-    assert_jsonrpc_valid, assert_success_response, components, find_free_port, namespaces,
-    TestClient, TestCoordinator,
+    assert_error_response, assert_jsonrpc_valid, assert_success_response, components,
+    find_free_port, namespaces, TestClient, TestCoordinator,
 };
 use ruleco_coordinator::core::parameter_types::AddNodesParams;
 use ruleco_core::full_name::FullName;
@@ -162,10 +162,14 @@ fn coordinator_sign_in_duplicate_namespace() {
         )
         .expect("Failed to send add_nodes for duplicate");
 
-    // Wait for connection attempt and sign-in
-    thread::sleep(Duration::from_millis(300));
+    // Receive and assert the duplicate add_nodes was rejected
+    let response_dup = client_n1
+        .receive_jsonrpc_response(1000)
+        .expect("Should receive response for duplicate add_nodes");
+    assert_jsonrpc_valid(&response_dup);
+    assert_error_response(&response_dup, -32091);
 
-    // Shutdown all coordinators
+    // Shutdown all coordinators - first N2_a via N1
     let full_name_n2 =
         FullName::from_strings(namespaces::N2, namespaces::COORDINATOR_NAME).unwrap();
     client_n1
@@ -183,7 +187,17 @@ fn coordinator_sign_in_duplicate_namespace() {
     coordinator_n2_a
         .join_thread(Duration::from_secs(5))
         .expect("Failed to join N2_a");
-    drop(coordinator_n2_b); // Let it drop naturally
+
+    // Shutdown N2_b separately - need to connect a client to it and sign in first
+    let mut client_n2_b =
+        TestClient::connect(coordinator_n2_b.port).expect("Failed to create client for N2_b");
+    client_n2_b
+        .sign_in(components::CA, Some(&coordinator_n2_b.namespace))
+        .expect("Failed to sign in to N2_b");
+    let mut coordinator_n2_b = coordinator_n2_b;
+    coordinator_n2_b
+        .shutdown(&client_n2_b)
+        .expect("Failed to shutdown N2_b");
 }
 
 /// Coordinator sign-out success

@@ -114,7 +114,9 @@ where
             }
 
             let timeout_duration = Duration::from_secs(self.timeout_interval);
-            let timed_out = self.pending_connections.check_timeouts(timeout_duration);
+            let timed_out = self
+                .pending_connections
+                .check_timeouts(timeout_duration, self.core.clock());
             for dealer_identity in timed_out {
                 eprintln!("Pending connection timed out");
                 let _ = self.adapter.disconnect_from_coordinator(&dealer_identity);
@@ -197,10 +199,19 @@ where
         message: MessageView,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(sender) = message.sender() {
-            if sender.namespace() == self.name.namespace() || sender.namespace().is_empty() {
-                let _ = self.core.update_component_last_seen(&sender);
-            } else if sender.name() == b"COORDINATOR" {
-                let _ = self.core.update_coordinator_last_seen(sender.namespace());
+            match &sender_identity {
+                Identity::Component { .. } => {
+                    if sender.namespace() == self.name.namespace() || sender.namespace().is_empty()
+                    {
+                        let _ = self.core.update_component_last_seen(&sender);
+                    }
+                }
+                Identity::Coordinator { .. } => {
+                    if sender.name() == b"COORDINATOR" {
+                        let _ = self.core.update_coordinator_last_seen(sender.namespace());
+                    }
+                }
+                Identity::SelfTarget => {}
             }
         }
 
@@ -372,7 +383,7 @@ where
                     let frames = response_message.into_raw_frames();
                     match &identity {
                         Identity::SelfTarget => {
-                            return Ok(());
+                            continue;
                         }
                         _ => {
                             self.adapter.send(&identity, frames)?;

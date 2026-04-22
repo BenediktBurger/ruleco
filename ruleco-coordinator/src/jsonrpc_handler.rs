@@ -270,7 +270,9 @@ impl<'a> JsonRpcHandler<'a> {
             }
             "add_nodes" => self.handle_add_nodes(message, request.id(), request.params()),
             "send_nodes" => self.handle_send_nodes(message, request.id()),
-            "record_components" => self.handle_record_components(message, request.id()),
+            "record_components" => {
+                self.handle_record_components(message, request.id(), request.params())
+            }
             "send_local_components" => self.handle_send_local_components(message, request.id()),
             "send_global_components" => self.handle_send_global_components(message, request.id()),
             "remove_expired_addresses" => {
@@ -577,13 +579,39 @@ impl<'a> JsonRpcHandler<'a> {
         id: Id,
         params: Params,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+        let sender = self.extract_sender(message)?;
         let nodes = params.parse::<AddNodesParams>()?;
-        let addresses = self.core.handle_add_nodes(nodes);
+        let mut addresses = Vec::<String>::new();
+        let mut duplicate_ns: Option<String> = None;
+        for (ns, address) in nodes.nodes {
+            if ns.as_bytes() == self.core.namespace() {
+                continue;
+            }
+            let stored_d = self.core.directory_ref().get_coordinator(ns.as_bytes());
+            match stored_d {
+                None => {
+                    addresses.push(address);
+                }
+                Some(entry) => {
+                    if entry.address != address {
+                        duplicate_ns = Some(ns);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(ns) = duplicate_ns {
+            return Ok(vec![JsonRpcOutcome::Response(self.create_error_response(
+                sender,
+                id,
+                &Error::duplicate_name_with_data(serde_json::Value::String(ns)),
+                Some(message.header().conversation_id.clone()),
+            )?)]);
+        }
         let mut outcomes = self.create_null_response_outcome(message, id)?;
-        match addresses {
-            Some(addresses) => outcomes.push(JsonRpcOutcome::AddNodes(addresses)),
-            None => (),
-        };
+        if !addresses.is_empty() {
+            outcomes.push(JsonRpcOutcome::AddNodes(addresses));
+        }
         Ok(outcomes)
     }
 
@@ -612,26 +640,34 @@ impl<'a> JsonRpcHandler<'a> {
         &mut self,
         message: &MessageView,
         id: Id,
+        params: Params,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
         use crate::core::parameter_types::RecordComponentsParams;
 
         let sender = self.extract_sender(message)?;
         let sender_namespace = sender.namespace().to_vec();
 
-        if let Some(content_frame) = message.content_frame() {
-            if let Ok(request) = serde_json::from_slice::<Request>(content_frame) {
-                if let Ok(params) = request.params().parse::<RecordComponentsParams>() {
-                    let components: Vec<FullName> = params
-                        .components
-                        .into_iter()
-                        .filter_map(|s| FullName::from_str(&s).ok())
-                        .collect();
-                    self.core
-                        .directory_mut()
-                        .add_remote_components(sender_namespace, components)?;
-                }
+        let parsed_params = match params.parse::<RecordComponentsParams>() {
+            Ok(p) => p,
+            Err(_) => {
+                let error_message = self.create_error_response(
+                    sender,
+                    id,
+                    &Error::JsonRpc(ErrorObject::from(ErrorCode::InvalidParams)),
+                    Some(message.header().conversation_id.clone()),
+                )?;
+                return Ok(vec![JsonRpcOutcome::Response(error_message)]);
             }
-        }
+        };
+
+        let components: Vec<FullName> = parsed_params
+            .components
+            .into_iter()
+            .filter_map(|s| FullName::from_str(&s).ok())
+            .collect();
+        self.core
+            .directory_mut()
+            .add_remote_components(sender_namespace, components)?;
 
         self.create_null_response_outcome(message, id)
     }
@@ -707,7 +743,18 @@ impl<'a> JsonRpcHandler<'a> {
         params: Params,
     ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
         let parsed_params = params.parse::<RemoveExpiredAddressesParams>()?;
-        let expiration_duration = Duration::from_secs_f64(parsed_params.expiration_time);
+        let expiration_duration = match Duration::try_from_secs_f64(parsed_params.expiration_time) {
+            Ok(duration) => duration,
+            Err(_) => {
+                let sender = self.extract_sender(message)?;
+                return Ok(vec![JsonRpcOutcome::Response(self.create_error_response(
+                    sender,
+                    id,
+                    &Error::JsonRpc(ErrorObject::from(ErrorCode::InvalidParams)),
+                    Some(message.header().conversation_id.clone()),
+                )?)]);
+            }
+        };
 
         let timed_out = self.core.check_timeouts(expiration_duration);
         self.core.remove_timed_out_components(&timed_out)?;

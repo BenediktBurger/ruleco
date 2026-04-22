@@ -137,20 +137,20 @@ fn test_message_from_local_component_signed_in_via_dealer() {
         clock,
     );
 
-    // Create a message from a local component that came via DEALER (shouldn't happen but test the case)
-    // This message will NOT be validated because it's from a DEALER socket!
+    // Create a message from a remote coordinator via DEALER socket
+    // Remote coordinators bypass local component validation
     let message = MessageBuilder::new()
         .receiver(self_name())
-        .sender(component1_name())
+        .sender(remote_coordinator_name())
         .message_type(MessageType::Json.into())
         .payload_single(br#"{"jsonrpc":"2.0","method":"sign_in","id":1}"#.to_vec())
         .build()
         .unwrap();
 
-    // Test - even though component1 is not signed in, message should pass because it's from a DEALER socket
+    // Test - remote coordinator message should pass validation bypass
     let decision = core.route_message(
         &message.to_view().unwrap(),
-        &remote_identity(b"dealer_id_for_local_component"),
+        &remote_identity(b"dealer_id_for_remote_coordinator"),
     );
 
     // Assertions - should route to self (coordinator)

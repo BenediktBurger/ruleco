@@ -64,6 +64,7 @@ impl ZmqAdapter {
         dealer_identity: &[u8],
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(socket) = self.dealer_sockets.remove(dealer_identity) {
+            let _ = socket.set_linger(0);
             drop(socket);
         }
         Ok(())
@@ -176,14 +177,13 @@ impl MessagePort for ZmqAdapter {
             if index > 0 && index <= dealer_ids.len() {
                 let dealer_id = &dealer_ids[index - 1];
                 if let Some(socket) = self.dealer_sockets.get(dealer_id) {
-                    if let Ok(frames) = self.receive_from_dealer(socket) {
-                        messages.push((
-                            Identity::Coordinator {
-                                identity: dealer_id.clone(),
-                            },
-                            frames,
-                        ));
-                    }
+                    let frames = self.receive_from_dealer(socket)?;
+                    messages.push((
+                        Identity::Coordinator {
+                            identity: dealer_id.clone(),
+                        },
+                        frames,
+                    ));
                 }
             }
         }

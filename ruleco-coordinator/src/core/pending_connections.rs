@@ -71,8 +71,12 @@ impl PendingConnections {
     }
 
     /// Check for timed out pending connections
-    pub fn check_timeouts(&mut self, timeout_duration: std::time::Duration) -> Vec<Vec<u8>> {
-        let now = std::time::Instant::now();
+    pub fn check_timeouts(
+        &mut self,
+        timeout_duration: std::time::Duration,
+        clock: &dyn crate::core::ports::ClockPort,
+    ) -> Vec<Vec<u8>> {
+        let now = clock.now();
         let timed_out: Vec<Vec<u8>> = self
             .connections
             .iter()

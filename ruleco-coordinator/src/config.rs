@@ -84,11 +84,23 @@ impl CoordinatorConfig {
             None => default.namespace,
         };
 
-        let port = coordinator_settings.port.unwrap_or(default.port);
+        let mut port = coordinator_settings.port.unwrap_or(default.port);
 
         let bind_address = coordinator_settings
             .bind_address
+            .as_ref()
+            .map(|s| s.clone())
             .unwrap_or_else(|| format!("tcp://*:{}", port));
+
+        if coordinator_settings.bind_address.is_some() {
+            if let Some(addr_port) = bind_address.strip_prefix("tcp://") {
+                if let Some(port_str) = addr_port.rsplit(':').next() {
+                    if let Ok(parsed_port) = port_str.parse::<u16>() {
+                        port = parsed_port;
+                    }
+                }
+            }
+        }
 
         let public_address = match coordinator_settings.public_address {
             Some(addr) if !addr.is_empty() => addr,
@@ -226,7 +238,7 @@ mod tests {
         let config = CoordinatorConfig::from_raw(raw);
         assert_eq!(config.bind_address, "tcp://0.0.0.0:9999");
         assert_eq!(config.public_address, "tcp://10.0.1.5:9999");
-        assert_eq!(config.port, 12300);
+        assert_eq!(config.port, 9999);
     }
 
     #[test]
