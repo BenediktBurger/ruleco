@@ -1,10 +1,10 @@
 //! Module for tracking pending connections to remote coordinators
 
-use std::collections::HashMap;
 use ruleco_core::full_name::FullName;
+use std::collections::HashMap;
 
 /// Tracks pending connections to remote coordinators
-/// 
+///
 /// This stores the mapping between dealer identities and the information
 /// needed to complete the connection process.
 pub struct PendingConnections {
