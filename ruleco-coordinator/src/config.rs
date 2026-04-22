@@ -135,7 +135,11 @@ impl CoordinatorConfig {
             if let Some(hostname_str) = hostname.to_str() {
                 if let Ok(addrs) = dns_lookup::lookup_host(hostname_str) {
                     if let Some(addr) = addrs.first() {
-                        return format!("tcp://{}:{}", addr, port);
+                        let host = match addr {
+                            std::net::IpAddr::V4(addr) => addr.to_string(),
+                            std::net::IpAddr::V6(addr) => format!("[{}]", addr),
+                        };
+                        return format!("tcp://{}:{}", host, port);
                     }
                 }
             }
