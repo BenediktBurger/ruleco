@@ -5,12 +5,14 @@ use crate::core::ports::clock_port::ClockPort;
 use crate::core::ports::message_port::Identity;
 use crate::core::ports::DirectoryPort;
 use crate::core::CoordinatorCore;
+use anyhow::Result;
 use jsonrpsee_types::request::Request;
 use jsonrpsee_types::Params;
 use jsonrpsee_types::{
     response::{Response, ResponsePayload},
     ErrorCode, ErrorObject, Id,
 };
+use log::warn;
 use ruleco_core::errors::Error;
 use ruleco_core::full_name::FullName;
 use ruleco_core::message::{ConversationId, MessageBuilder, MessageView};
@@ -58,7 +60,7 @@ impl<'a> JsonRpcHandler<'a> {
         identity: Identity,
         message: &MessageView,
         content_frame: &[u8],
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         // First, try to parse as a JSON value to determine if it's a batch
         let json_value: serde_json::Value = match serde_json::from_slice(content_frame) {
             Ok(value) => value,
@@ -74,7 +76,7 @@ impl<'a> JsonRpcHandler<'a> {
                         return Ok(vec![JsonRpcOutcome::Response(error_message)]);
                     }
                     Err(e) => {
-                        eprintln!("Error: Malformed sender name in message, cannot send error response: {:?}", e);
+                        log::error!("Malformed sender name in message, cannot send error response: {:?}", e);
                         return Ok(vec![]);
                     }
                 }
@@ -102,7 +104,7 @@ impl<'a> JsonRpcHandler<'a> {
                             Ok(vec![JsonRpcOutcome::Response(error_message)])
                         }
                         Err(e) => {
-                            eprintln!("Error: Malformed sender name in message, cannot send error response: {:?}", e);
+                            warn!("Malformed sender name in message, cannot send error response: {:?}", e);
                             Ok(vec![])
                         }
                     },
@@ -121,7 +123,7 @@ impl<'a> JsonRpcHandler<'a> {
                         Ok(vec![JsonRpcOutcome::Response(error_message)])
                     }
                     Err(e) => {
-                        eprintln!("Error: Malformed sender name in message, cannot send error response: {:?}", e);
+                        warn!("Malformed sender name in message, cannot send error response: {:?}", e);
                         return Ok(vec![]);
                     }
                 }
@@ -135,7 +137,7 @@ impl<'a> JsonRpcHandler<'a> {
         identity: Identity,
         message: &MessageView,
         requests: Vec<serde_json::Value>,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         if requests.is_empty() {
             // Per JSON-RPC 2.0 spec, an empty batch is an error
             match message.sender() {
@@ -149,8 +151,8 @@ impl<'a> JsonRpcHandler<'a> {
                     return Ok(vec![JsonRpcOutcome::Response(error_message)]);
                 }
                 Err(e) => {
-                    eprintln!(
-                        "Error: Malformed sender name in message, cannot send error response: {:?}",
+                    warn!(
+                        "Malformed sender name in message, cannot send error response: {:?}",
                         e
                     );
                     return Ok(vec![]);
@@ -253,7 +255,7 @@ impl<'a> JsonRpcHandler<'a> {
         identity: Identity,
         message: &MessageView,
         request: Request,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         match request.method_name() {
             // Component methods
             "pong" => self.handle_pong(message, request.id()),
@@ -301,7 +303,7 @@ impl<'a> JsonRpcHandler<'a> {
         &self,
         message: &MessageView,
         id: Id,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+    ) -> Result<MessageView> {
         let sender = self.extract_sender(message)?;
         self.create_json_response(
             sender,
@@ -318,7 +320,7 @@ impl<'a> JsonRpcHandler<'a> {
         id: Id,
         error: &Error,
         conversation_id: Option<ConversationId>,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+    ) -> Result<MessageView> {
         let error_object: ErrorObject<'static> = match error {
             Error::Leco(leco_error) => leco_error.clone().into(),
             Error::JsonRpc(json_rpc_error) => json_rpc_error.clone(),
@@ -346,7 +348,7 @@ impl<'a> JsonRpcHandler<'a> {
         id: Id,
         result: Value,
         conversation_id: Option<ConversationId>,
-    ) -> Result<MessageView, Box<dyn std::error::Error>> {
+    ) -> Result<MessageView> {
         let response = Response::new(ResponsePayload::Success(Cow::Borrowed(&result)), id);
         let response_msg = serde_json::to_vec(&response)?;
 
@@ -366,7 +368,7 @@ impl<'a> JsonRpcHandler<'a> {
         &self,
         message: &MessageView,
         id: Id,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         if id == Id::Null {
             return Ok(Vec::<JsonRpcOutcome>::new());
         } else {
@@ -380,7 +382,7 @@ impl<'a> JsonRpcHandler<'a> {
         &self,
         message: &MessageView,
         id: Id,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         self.create_null_response_outcome(message, id)
     }
 
@@ -389,7 +391,7 @@ impl<'a> JsonRpcHandler<'a> {
         identity: Identity,
         message: &MessageView,
         id: Id,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         let sender = self.extract_sender(message)?;
         let identity_bytes = match &identity {
             Identity::Component { identity } | Identity::Coordinator { identity } => identity,
@@ -422,7 +424,7 @@ impl<'a> JsonRpcHandler<'a> {
         identity: Identity,
         message: &MessageView,
         id: Id,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         let sender = self.extract_sender(message)?;
         let identity_bytes = match &identity {
             Identity::Component { identity } | Identity::Coordinator { identity } => identity,
@@ -456,7 +458,7 @@ impl<'a> JsonRpcHandler<'a> {
         identity: Identity,
         message: &MessageView,
         id: Id,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         // Extract sender (should be the coordinator signing in)
         let sender = self.extract_sender(message)?;
 
@@ -532,7 +534,7 @@ impl<'a> JsonRpcHandler<'a> {
         identity: Identity,
         message: &MessageView,
         id: Id,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         let sender = self.extract_sender(message)?;
         let sender_namespace = sender.namespace();
 
@@ -567,7 +569,7 @@ impl<'a> JsonRpcHandler<'a> {
 
         self.core.remove_coordinator(sender_namespace)?;
         if let Err(err) = self.core.remove_remote_components(sender_namespace) {
-            eprintln!("Warning: Failed to remove remote components: {}", err);
+            warn!("Failed to remove remote components: {}", err);
         }
 
         self.create_null_response_outcome(message, id)
@@ -578,7 +580,7 @@ impl<'a> JsonRpcHandler<'a> {
         message: &MessageView,
         id: Id,
         params: Params,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         let sender = self.extract_sender(message)?;
         let nodes = params.parse::<AddNodesParams>()?;
         let mut addresses = Vec::<String>::new();
@@ -619,7 +621,7 @@ impl<'a> JsonRpcHandler<'a> {
         &mut self,
         message: &MessageView,
         id: Id,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         let sender = self.extract_sender(message)?;
         let nodes_map = serde_json::Map::from_iter(
             self.core
@@ -641,11 +643,23 @@ impl<'a> JsonRpcHandler<'a> {
         message: &MessageView,
         id: Id,
         params: Params,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         use crate::core::parameter_types::RecordComponentsParams;
 
         let sender = self.extract_sender(message)?;
-        let sender_namespace = sender.namespace().to_vec();
+        let sender_namespace = sender.namespace();
+
+        if !self.core.is_coordinator_registered(sender_namespace) {
+            let error_message = self.create_error_response(
+                sender,
+                id,
+                &Error::JsonRpc(ErrorObject::from(ErrorCode::InvalidParams)),
+                Some(message.header().conversation_id.clone()),
+            )?;
+            return Ok(vec![JsonRpcOutcome::Response(error_message)]);
+        }
+
+        let sender_namespace = sender_namespace.to_vec();
 
         let parsed_params = match params.parse::<RecordComponentsParams>() {
             Ok(p) => p,
@@ -676,7 +690,7 @@ impl<'a> JsonRpcHandler<'a> {
         &mut self,
         message: &MessageView,
         id: Id,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         let sender = self.extract_sender(message)?;
 
         let components = self.core.get_local_components();
@@ -695,7 +709,7 @@ impl<'a> JsonRpcHandler<'a> {
         &mut self,
         message: &MessageView,
         id: Id,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         let sender = self.extract_sender(message)?;
 
         let mut result_map = serde_json::Map::new();
@@ -741,7 +755,7 @@ impl<'a> JsonRpcHandler<'a> {
         message: &MessageView,
         id: Id,
         params: Params,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         let parsed_params = params.parse::<RemoveExpiredAddressesParams>()?;
         let expiration_duration = match Duration::try_from_secs_f64(parsed_params.expiration_time) {
             Ok(duration) => duration,
@@ -766,7 +780,7 @@ impl<'a> JsonRpcHandler<'a> {
         &mut self,
         message: &MessageView,
         id: Id,
-    ) -> Result<Vec<JsonRpcOutcome>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<JsonRpcOutcome>> {
         let response_message = self.create_null_response(message, id)?;
 
         Ok(vec![

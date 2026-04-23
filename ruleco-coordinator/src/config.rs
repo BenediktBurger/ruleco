@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
+use log::warn;
 
 #[derive(Debug, Deserialize)]
 struct RawConfig {
@@ -49,7 +50,7 @@ impl CoordinatorConfig {
                 let content = match fs::read_to_string(&path) {
                     Ok(c) => c,
                     Err(e) => {
-                        eprintln!("Failed to read config file {:?}: {}", path, e);
+                        warn!("Failed to read config file {:?}: {}", path, e);
                         continue;
                     }
                 };
@@ -57,7 +58,7 @@ impl CoordinatorConfig {
                 match toml::from_str::<RawConfig>(&content) {
                     Ok(raw) => return Self::from_raw(raw),
                     Err(e) => {
-                        eprintln!("Failed to parse config file {:?}: {}", path, e);
+                        warn!("Failed to parse config file {:?}: {}", path, e);
                         continue;
                     }
                 }
@@ -128,8 +129,43 @@ impl CoordinatorConfig {
         dirs::config_dir().map(|p| p.join("ruleco").join("config.toml"))
     }
 
-    /// Get the public IP address of this machine
-    /// First tries to resolve the hostname, then falls back to localhost
+    pub fn apply_cli_overrides(
+        mut self,
+        namespace: Option<String>,
+        port: Option<u16>,
+        bind_address: Option<String>,
+        public_address: Option<String>,
+        timeout_interval: Option<u64>,
+    ) -> Self {
+        if let Some(ns) = namespace {
+            self.namespace = ns;
+        }
+        if let Some(p) = port {
+            self.port = p;
+            self.bind_address = format!("tcp://*:{}", p);
+            if public_address.is_none() {
+                self.public_address = Self::get_public_address(&p.to_string());
+            }
+        }
+        if let Some(addr) = bind_address {
+            self.bind_address = addr.clone();
+            if let Some(addr_port) = addr.strip_prefix("tcp://") {
+                if let Some(port_str) = addr_port.rsplit(':').next() {
+                    if let Ok(parsed_port) = port_str.parse::<u16>() {
+                        self.port = parsed_port;
+                    }
+                }
+            }
+        }
+        if let Some(addr) = public_address {
+            self.public_address = addr;
+        }
+        if let Some(interval) = timeout_interval {
+            self.timeout_interval = interval;
+        }
+        self
+    }
+
     fn get_public_address(port: &str) -> String {
         if let Ok(hostname) = hostname::get() {
             if let Some(hostname_str) = hostname.to_str() {
@@ -145,7 +181,7 @@ impl CoordinatorConfig {
             }
         }
 
-        eprintln!("Warning: Could not determine public IP address from hostname. Using 127.0.0.1 which will only work for local connections. Please configure 'public_address' in ruleco.toml for mutual coordinator sign-in across machines.");
+        warn!("Could not determine public IP address from hostname. Using 127.0.0.1 which will only work for local connections. Please configure 'public_address' in ruleco.toml for mutual coordinator sign-in across machines.");
         format!("tcp://127.0.0.1:{}", port)
     }
 }

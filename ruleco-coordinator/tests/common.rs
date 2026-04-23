@@ -70,8 +70,9 @@ impl TestCoordinator {
             let mut coordinator =
                 CoordinatorApp::new(&thread_namespace, Some(port), timeout_interval)
                     .map_err(|e| format!("Failed to create coordinator: {}", e))?;
+            let (_shutdown_tx, shutdown_rx) = crossbeam_channel::bounded::<()>(1);
             coordinator
-                .run()
+                .run(shutdown_rx)
                 .map_err(|e| format!("Coordinator run failed: {}", e))
         });
 

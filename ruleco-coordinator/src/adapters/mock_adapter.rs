@@ -1,5 +1,6 @@
 use crate::core::ports::message_port::Identity;
 use crate::core::ports::{ConnectionManagementPort, MessagePort};
+use anyhow::Result;
 use ruleco_core::message::MessageView;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -146,10 +147,10 @@ impl MessagePort for MockAdapter {
         &self,
         dest_identity: &Identity,
         frames: Vec<Vec<u8>>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         match dest_identity {
             Identity::SelfTarget => {
-                return Err("send_to_self not implemented for MockAdapter".into());
+                anyhow::bail!("send_to_self not implemented for MockAdapter");
             }
             _ => {
                 self.sent_messages
@@ -163,14 +164,14 @@ impl MessagePort for MockAdapter {
     fn recv(
         &self,
         _timeout_ms: i64,
-    ) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<(Identity, Vec<Vec<u8>>)>> {
         let mut queue = self.receive_queue_device.borrow_mut();
         Ok(queue.pop_front())
     }
 
     fn recv_coordinator_sign_ins(
         &self,
-    ) -> Result<Vec<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<(Identity, Vec<Vec<u8>>)>> {
         let mut messages = Vec::new();
         let mut queue = self.receive_queue_dealer.borrow_mut();
 
@@ -183,14 +184,14 @@ impl MessagePort for MockAdapter {
 }
 
 impl ConnectionManagementPort for MockAdapter {
-    fn listen_for_components(&mut self, _address: &str) -> Result<(), Box<dyn std::error::Error>> {
+    fn listen_for_components(&mut self, _address: &str) -> Result<()> {
         Ok(())
     }
 
     fn connect_to_coordinator(
         &mut self,
         _address: &str,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u8>> {
         let identity = self.next_dealer_identity();
         self.connected_dealers
             .borrow_mut()
@@ -203,7 +204,7 @@ impl ConnectionManagementPort for MockAdapter {
     fn disconnect_from_coordinator(
         &mut self,
         dealer_identity: &[u8],
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         self.connected_dealers.borrow_mut().retain(|id| {
             !matches!(id, Identity::Coordinator { identity } if identity.as_slice() == dealer_identity)
         });

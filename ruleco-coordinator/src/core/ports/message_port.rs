@@ -7,6 +7,8 @@
 /// The actual transport implementation (sockets, connections, identity management)
 /// is completely hidden - the domain layer only sees frame exchange.
 
+use anyhow::Result;
+
 /// Source context for received messages
 ///
 /// This enum distinguishes the transport context of a received message,
@@ -59,7 +61,7 @@ pub trait MessagePort {
         &self,
         dest_identity: &Identity,
         frames: Vec<Vec<u8>>,
-    ) -> Result<(), Box<dyn std::error::Error>>;
+    ) -> Result<()>;
 
     /// Receive a message with timeout
     ///
@@ -73,7 +75,7 @@ pub trait MessagePort {
     fn recv(
         &self,
         timeout_ms: i64,
-    ) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>>;
+    ) -> Result<Option<(Identity, Vec<Vec<u8>>)>>;
 
     /// Receive coordinator sign-in responses
     ///
@@ -84,7 +86,7 @@ pub trait MessagePort {
     /// A vector of tuples containing (source_context, received_frames)
     fn recv_coordinator_sign_ins(
         &self,
-    ) -> Result<Vec<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>>;
+    ) -> Result<Vec<(Identity, Vec<Vec<u8>>)>>;
 }
 
 /// Interface for connection lifecycle management
@@ -93,37 +95,15 @@ pub trait MessagePort {
 /// away the underlying technology (e.g., ZeroMQ, TCP, local IPC).
 /// These are transport-layer concerns, not domain logic.
 pub trait ConnectionManagementPort: Send + Sync {
-    /// Start listening for component connections
-    ///
-    /// Binds to an address to accept connections from local components.
-    /// The specific transport mechanism is abstracted away.
-    ///
-    /// # Parameters
-    /// * `address` - Address to listen on (e.g., "tcp://*:12300")
-    fn listen_for_components(&mut self, address: &str) -> Result<(), Box<dyn std::error::Error>>;
+    fn listen_for_components(&mut self, address: &str) -> Result<()>;
 
-    /// Connect to a remote coordinator
-    ///
-    /// Establishes a connection to another coordinator's listening address.
-    ///
-    /// # Parameters
-    /// * `address` - Address of the remote coordinator's listening endpoint
-    ///
-    /// # Returns
-    /// The connection identity for this remote coordinator
     fn connect_to_coordinator(
         &mut self,
         address: &str,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>>;
+    ) -> Result<Vec<u8>>;
 
-    /// Disconnect from a remote coordinator
-    ///
-    /// Closes the connection to a remote coordinator.
-    ///
-    /// # Parameters
-    /// * `identity` - The connection identity of the remote coordinator to disconnect
     fn disconnect_from_coordinator(
         &mut self,
         identity: &[u8],
-    ) -> Result<(), Box<dyn std::error::Error>>;
+    ) -> Result<()>;
 }

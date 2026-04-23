@@ -2,6 +2,7 @@ use std::i64;
 
 use crate::core::ports::message_port::Identity;
 use crate::core::ports::{ConnectionManagementPort, MessagePort};
+use anyhow::Result;
 use ruleco_core::message::ConversationId;
 use zmq;
 
@@ -28,7 +29,7 @@ impl Drop for ZmqAdapter {
 
 impl ZmqAdapter {
     /// Create a new ZMQ adapter
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new() -> Result<Self> {
         let context = zmq::Context::new();
         let router_socket = context.socket(zmq::ROUTER)?;
 
@@ -43,7 +44,7 @@ impl ZmqAdapter {
     fn connect_to_coordinator_impl(
         &mut self,
         address: &str,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u8>> {
         let dealer_socket = self.context.socket(zmq::DEALER)?;
         let connect_address = if address.starts_with("tcp://") {
             address.to_string()
@@ -62,7 +63,7 @@ impl ZmqAdapter {
     fn disconnect_from_coordinator_impl(
         &mut self,
         dealer_identity: &[u8],
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         if let Some(socket) = self.dealer_sockets.remove(dealer_identity) {
             let _ = socket.set_linger(0);
             drop(socket);
@@ -76,20 +77,20 @@ impl ZmqAdapter {
     }
 
     /// Poll router socket for messages
-    fn poll_router(&self, timeout_ms: i64) -> Result<bool, Box<dyn std::error::Error>> {
+    fn poll_router(&self, timeout_ms: i64) -> Result<bool> {
         let mut poll_items = vec![self.router_socket.as_poll_item(zmq::POLLIN)];
         Ok(zmq::poll(&mut poll_items, timeout_ms)? > 0)
     }
 
     /// Receive a message from the router socket
-    fn receive_from_router(&self) -> Result<(Identity, Vec<Vec<u8>>), Box<dyn std::error::Error>> {
+    fn receive_from_router(&self) -> Result<(Identity, Vec<Vec<u8>>)> {
         let identity = self.router_socket.recv_bytes(0)?;
         let frames = self.router_socket.recv_multipart(0)?;
         Ok((Identity::Component { identity }, frames))
     }
 
     /// Poll dealer sockets for messages
-    fn poll_dealers(&self) -> Result<(Vec<usize>, Vec<Vec<u8>>), Box<dyn std::error::Error>> {
+    fn poll_dealers(&self) -> Result<(Vec<usize>, Vec<Vec<u8>>)> {
         let dealer_identities: Vec<Vec<u8>> = self
             .dealer_sockets_iter()
             .map(|(id, _)| id.clone())
@@ -121,10 +122,10 @@ impl ZmqAdapter {
     fn receive_from_dealer(
         &self,
         socket: &zmq::Socket,
-    ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<Vec<u8>>> {
         let frames = socket.recv_multipart(0)?;
         if frames.is_empty() {
-            return Err("Invalid message format: no parts".into());
+            anyhow::bail!("Invalid message format: no parts");
         }
         Ok(frames)
     }
@@ -135,7 +136,7 @@ impl MessagePort for ZmqAdapter {
         &self,
         dest_identity: &Identity,
         frames: Vec<Vec<u8>>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         match dest_identity {
             Identity::Component { identity } => {
                 self.router_socket.send(identity, zmq::SNDMORE)?;
@@ -150,7 +151,7 @@ impl MessagePort for ZmqAdapter {
                 }
             }
             Identity::SelfTarget => {
-                return Err("Self-targeted messages should be handled internally".into());
+                anyhow::bail!("Self-targeted messages should be handled internally");
             }
         }
         Ok(())
@@ -159,7 +160,7 @@ impl MessagePort for ZmqAdapter {
     fn recv(
         &self,
         timeout_ms: i64,
-    ) -> Result<Option<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<(Identity, Vec<Vec<u8>>)>> {
         if self.poll_router(timeout_ms)? {
             Ok(Some(self.receive_from_router()?))
         } else {
@@ -169,7 +170,7 @@ impl MessagePort for ZmqAdapter {
 
     fn recv_coordinator_sign_ins(
         &self,
-    ) -> Result<Vec<(Identity, Vec<Vec<u8>>)>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<(Identity, Vec<Vec<u8>>)>> {
         let mut messages = Vec::new();
         let (readable, dealer_ids) = self.poll_dealers()?;
 
@@ -193,7 +194,7 @@ impl MessagePort for ZmqAdapter {
 }
 
 impl ConnectionManagementPort for ZmqAdapter {
-    fn listen_for_components(&mut self, address: &str) -> Result<(), Box<dyn std::error::Error>> {
+    fn listen_for_components(&mut self, address: &str) -> Result<()> {
         self.router_socket.bind(address)?;
         Ok(())
     }
@@ -205,14 +206,14 @@ impl ConnectionManagementPort for ZmqAdapter {
     fn connect_to_coordinator(
         &mut self,
         address: &str,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u8>> {
         self.connect_to_coordinator_impl(address)
     }
 
     fn disconnect_from_coordinator(
         &mut self,
         identity: &[u8],
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         self.disconnect_from_coordinator_impl(identity)
     }
 }

@@ -7,7 +7,10 @@ use crate::core::ports::routing_port::RoutingPort;
 use crate::core::ports::{ConnectionManagementPort, MessagePort};
 use crate::core::CoordinatorCore;
 use crate::jsonrpc_handler::{JsonRpcHandler, JsonRpcOutcome};
+use anyhow::Result;
+use crossbeam_channel::Receiver;
 use jsonrpsee_types::{Id, Request};
+use log::{debug, error, info, warn};
 use ruleco_core::errors::Error;
 use ruleco_core::full_name::FullName;
 use ruleco_core::message::{MessageBuilder, MessageView};
@@ -38,7 +41,7 @@ impl CoordinatorApp<ZmqAdapter> {
         namespace: &str,
         port: Option<u16>,
         timeout_interval: Option<u64>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self> {
         let port = port.unwrap_or(protocol_constants::DEFAULT_COORDINATOR_PORT);
         let timeout_interval = timeout_interval.unwrap_or(10);
         let mut zmq_adapter = ZmqAdapter::new()?;
@@ -53,7 +56,7 @@ impl CoordinatorApp<ZmqAdapter> {
         bind_address: &str,
         public_address: &str,
         timeout_interval: Option<u64>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self> {
         let timeout_interval = timeout_interval.unwrap_or(10);
         let mut zmq_adapter = ZmqAdapter::new()?;
         zmq_adapter.listen_for_components(bind_address)?;
@@ -76,7 +79,7 @@ where
         address: String,
         adapter: T,
         timeout_interval: u64,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self> {
         let namespace_bytes = namespace.as_bytes().to_vec();
         let directory_adapter = InMemoryDirectoryAdapter::new(namespace_bytes.clone());
         let clock_adapter = SystemClockAdapter::new();
@@ -101,49 +104,73 @@ where
     }
 
     /// Start the coordinator's main loop
-    pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn run(&mut self, shutdown_rx: Receiver<()>) -> Result<()> {
         self.running = true;
-        println!("Coordinator started");
+        info!(
+            "Coordinator started (namespace={}, address={})",
+            String::from_utf8_lossy(self.name.namespace()),
+            self.address
+        );
 
-        while self.running {
-            let timed_out = self
-                .core
-                .check_timeouts(Duration::from_secs(self.timeout_interval));
-            if !timed_out.is_empty() {
-                let _ = self.core.remove_timed_out_components(&timed_out);
+        loop {
+            if self.check_shutdown(&shutdown_rx) {
+                info!("Shutdown signal received");
+                break;
             }
 
-            let timeout_duration = Duration::from_secs(self.timeout_interval);
-            let timed_out = self
-                .pending_connections
-                .check_timeouts(timeout_duration, self.core.clock());
-            for dealer_identity in timed_out {
-                eprintln!("Pending connection timed out");
-                let _ = self.adapter.disconnect_from_coordinator(&dealer_identity);
+            if !self.running {
+                info!("Shutdown requested via RPC");
+                break;
             }
 
-            let timed_out_coordinators = self.core.check_coordinator_timeouts(timeout_duration);
-            if !timed_out_coordinators.is_empty() {
-                for ns in &timed_out_coordinators {
-                    if let Ok(dealer_id) = self.core.get_coordinator_dealer_identity(ns) {
-                        let _ = self.adapter.disconnect_from_coordinator(&dealer_id);
-                    }
-                }
-                let _ = self
-                    .core
-                    .remove_timed_out_coordinators(&timed_out_coordinators);
-            }
-
-            if let Err(e) = self.poll_and_process_messages() {
-                eprintln!("Error processing messages: {}", e);
-            }
+            self.check_timeouts();
+            self.poll_and_process_messages()?;
         }
 
-        println!("Coordinator stopped - exiting");
+        info!("Coordinator stopped - exiting");
         Ok(())
     }
 
-    /// Request the coordinator to stop
+    fn check_shutdown(&self, shutdown_rx: &Receiver<()>) -> bool {
+        match shutdown_rx.try_recv() {
+            Ok(_) => true,
+            Err(crossbeam_channel::TryRecvError::Empty) => false,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => true,
+        }
+    }
+
+    fn check_timeouts(&mut self) {
+        let timed_out = self
+            .core
+            .check_timeouts(Duration::from_secs(self.timeout_interval));
+        if !timed_out.is_empty() {
+            debug!("{} components timed out", timed_out.len());
+            let _ = self.core.remove_timed_out_components(&timed_out);
+        }
+
+        let timeout_duration = Duration::from_secs(self.timeout_interval);
+        let timed_out = self
+            .pending_connections
+            .check_timeouts(timeout_duration, self.core.clock());
+        for dealer_identity in timed_out {
+            warn!("Pending connection timed out");
+            let _ = self.adapter.disconnect_from_coordinator(&dealer_identity);
+        }
+
+        let timed_out_coordinators = self.core.check_coordinator_timeouts(timeout_duration);
+        if !timed_out_coordinators.is_empty() {
+            debug!("{} coordinators timed out", timed_out_coordinators.len());
+            for ns in &timed_out_coordinators {
+                if let Ok(dealer_id) = self.core.get_coordinator_dealer_identity(ns) {
+                    let _ = self.adapter.disconnect_from_coordinator(&dealer_id);
+                }
+            }
+            let _ = self
+                .core
+                .remove_timed_out_coordinators(&timed_out_coordinators);
+        }
+    }
+
     pub fn stop(&mut self) {
         self.running = false;
     }
@@ -154,12 +181,12 @@ where
     }
 
     /// Poll for messages and process them
-    fn poll_and_process_messages(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    fn poll_and_process_messages(&mut self) -> Result<()> {
         let timeout_ms = 100;
 
         while let Some((sender_identity, frames)) = self.adapter.recv(timeout_ms)? {
             if let Err(e) = self.process_raw_message(sender_identity, frames) {
-                eprintln!("Error processing message: {}", e);
+                error!("Error processing message: {}", e);
             }
         }
 
@@ -167,7 +194,7 @@ where
             let coordinator_msgs = self.adapter.recv_coordinator_sign_ins()?;
             for (sender_identity, frames) in coordinator_msgs {
                 if let Err(e) = self.process_raw_message(sender_identity, frames) {
-                    eprintln!("Error processing message: {}", e);
+                    error!("Error processing message: {}", e);
                 }
             }
         }
@@ -175,16 +202,15 @@ where
         Ok(())
     }
 
-    /// Process raw frames received from the adapter
     fn process_raw_message(
         &mut self,
         sender_identity: Identity,
         frames: Vec<Vec<u8>>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let message = match MessageView::new(frames) {
             Ok(msg) => msg,
             Err(e) => {
-                eprintln!("Failed to parse message: {:?}", e);
+                warn!("Failed to parse message: {:?}", e);
                 return Ok(());
             }
         };
@@ -192,12 +218,11 @@ where
         self.process_message(sender_identity, message)
     }
 
-    /// Process a parsed message
     fn process_message(
         &mut self,
         sender_identity: Identity,
         message: MessageView,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         if let Ok(sender) = message.sender() {
             match &sender_identity {
                 Identity::Component { .. } => {
@@ -244,7 +269,7 @@ where
         sender_identity: Identity,
         coordinator_name: FullName,
         message: &MessageView,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let dealer_identity = match &sender_identity {
             Identity::Coordinator { identity } | Identity::Component { identity } => {
                 identity.clone()
@@ -295,7 +320,7 @@ where
         &mut self,
         sender_identity: Identity,
         message: &MessageView,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let content_frame = match message.content_frame() {
             Some(frame) => frame,
             None => return Ok(()),
@@ -310,7 +335,7 @@ where
                 identity.clone()
             }
             Identity::SelfTarget => {
-                eprintln!("Self-targeted message from SelfTarget?");
+                warn!("Self-targeted message from SelfTarget?");
                 return Ok(());
             }
         };
@@ -329,7 +354,7 @@ where
                 .get_pending_connection(&sender_identity_bytes)
             {
                 if self.core.is_error_response(message) {
-                    eprintln!("Coordinator sign-in failed for {}", conn_info.address);
+                    error!("Coordinator sign-in failed for {}", conn_info.address);
                     self.pending_connections
                         .complete_connection(&sender_identity_bytes);
                     let _ = self
@@ -357,7 +382,7 @@ where
                         return Ok(());
                     }
                     Err(e) => {
-                        eprintln!("Error handling coordinator sign-in success: {}", e);
+                        error!("Error handling coordinator sign-in success: {}", e);
                         self.pending_connections
                             .complete_connection(&sender_identity_bytes);
                         let _ = self
@@ -423,11 +448,11 @@ where
         message: &MessageView,
         error: &Error,
         conversation_id: ruleco_core::message::ConversationId,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         match &identity {
             Identity::Component { .. } | Identity::Coordinator { .. } => {}
             Identity::SelfTarget => {
-                eprintln!("Cannot send error to self");
+                warn!("Cannot send error to self");
                 return Ok(());
             }
         };
@@ -449,7 +474,7 @@ where
         let dealer_identity = match self.adapter.connect_to_coordinator(&address) {
             Ok(id) => id,
             Err(err) => {
-                eprintln!("Failed to connect to coordinator at {}: {}", address, err);
+                error!("Failed to connect to coordinator at {}: {}", address, err);
                 return;
             }
         };
@@ -465,7 +490,7 @@ where
         let receiver_name = match FullName::from_slice(b"COORDINATOR") {
             Ok(name) => name,
             Err(e) => {
-                eprintln!("Failed to create remote coordinator name: {}", e);
+                error!("Failed to create remote coordinator name: {}", e);
                 return;
             }
         };
@@ -478,17 +503,17 @@ where
                 Ok(built_msg) => match built_msg.to_view() {
                     Ok(view) => view,
                     Err(e) => {
-                        eprintln!("Failed to create message view: {}", e);
+                        error!("Failed to create message view: {}", e);
                         return;
                     }
                 },
                 Err(e) => {
-                    eprintln!("Failed to build message: {}", e);
+                    error!("Failed to build message: {}", e);
                     return;
                 }
             },
             Err(e) => {
-                eprintln!("Failed to add payload to message: {}", e);
+                error!("Failed to add payload to message: {}", e);
                 return;
             }
         };
@@ -499,7 +524,7 @@ where
             },
             message.into_raw_frames(),
         ) {
-            eprintln!("Failed to send coordinator sign-in request: {}", err);
+            error!("Failed to send coordinator sign-in request: {}", err);
             let _ = self.adapter.disconnect_from_coordinator(&dealer_identity);
             self.pending_connections
                 .complete_connection(&dealer_identity);

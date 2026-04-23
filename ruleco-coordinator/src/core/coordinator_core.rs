@@ -344,7 +344,7 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
             let remote_name = FullName::new(coordinator.namespace.clone(), b"COORDINATOR".to_vec());
             match self.create_record_components_message(remote_name) {
                 Ok(msg) => messages.push(msg),
-                Err(e) => eprintln!("Warning: Failed to create directory sync message: {}", e),
+                Err(e) => log::warn!("Failed to create directory sync message: {}", e),
             }
         }
 

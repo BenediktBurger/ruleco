@@ -11,8 +11,8 @@ use std::time::Duration;
 
 mod common;
 use common::{
-    assert_jsonrpc_valid, assert_success_response, components, find_free_port, namespaces,
-    TestClient, TestCoordinator,
+    assert_error_response, assert_jsonrpc_valid, assert_success_response, components,
+    find_free_port, namespaces, TestClient, TestCoordinator,
 };
 use rstest::rstest;
 use ruleco_coordinator::core::parameter_types::AddNodesParams;
@@ -156,6 +156,8 @@ fn send_nodes_with_known_coordinators() {
 /// 2. Local coordinator stores in global directory
 ///
 /// Protocol: docs/schemas/coordinator.json#record_components
+///
+/// Authorization: Only registered coordinators can call this method
 #[test]
 fn record_components_method() {
     let mut coordinator_n1 = TestCoordinator::spawn(namespaces::N1, Some(find_free_port()));
@@ -166,6 +168,7 @@ fn record_components_method() {
         .expect("Failed to sign in");
 
     // Send record_components with remote coordinator's components
+    // This should be rejected because CA is a component, not a coordinator
     let remote_components = json!(["N2.CA", "N2.CB", "N2.CC"]);
 
     let params = json!({
@@ -181,10 +184,8 @@ fn record_components_method() {
         .expect("Should receive response");
 
     assert_jsonrpc_valid(&response);
-    assert_success_response(&response);
-
-    // Coordinator should have stored these components in global directory
-    // (Verification would require access to coordinator internal state)
+    // Should receive error because sender is not a registered coordinator
+    assert_error_response(&response, -32602);
 
     let _ = client.send_shutdown(None).expect("Failed to send shutdown");
     std::thread::sleep(Duration::from_millis(500));
