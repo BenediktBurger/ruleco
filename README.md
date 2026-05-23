@@ -17,6 +17,10 @@ This repository is a workspace and contains several crates.
 - _ruleco-coordinator_ contains a Coordinator implementation. Supports configuration via TOML config file (see [CONFIG.md](CONFIG.md)).
 - _ruleco-legacy_ contains my initial trials of ruleco code.
 
+## Architecture Decision Records
+
+Architectural decisions are documented as ADRs in `docs/adr/`. Workspace-wide decisions are stored there directly; crate-specific decisions go in `docs/adr/<crate-name>/` (subdirectories are created on demand).
+
 ## Coordinator Architecture
 
 The coordinator follows a hexagonal (ports and adapters) architecture pattern:

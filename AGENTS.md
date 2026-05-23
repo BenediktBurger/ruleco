@@ -3,7 +3,8 @@
 ## General instructions
 
 - You can find documentation about structure and architectural decisinos in the global `README.md` or in the package `README.md` files.
-- document relevant architecture decisions and packages in the appropriate `README.md` or in this file, as applicable.
+- document relevant architecture decisions as ADRs in `docs/adr/` (workspace-wide) or `docs/adr/<crate-name>/` (crate-specific). Subdirectories are created on demand. See `docs/adr/0001-record-architecture-decisions.md` for format and conventions.
+- document relevant packages in the appropriate `README.md` or in this file, as applicable.
 - For the definition of the control protocol we implement here, see `docs/control_protocol.md`
 - If I ask for guidance, maybe with a suggestion, give a honest response, whether that is a good idea or not.
 - the `docs/schemas` folder contains OpenRPC definitions of methods
