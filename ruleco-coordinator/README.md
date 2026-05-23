@@ -4,77 +4,31 @@ The coordinator is a central component in the RuLECO system that routes messages
 
 ## Architecture
 
-The coordinator follows a hexagonal (ports and adapters) architecture pattern:
+The coordinator follows a hexagonal (ports and adapters) architecture pattern. See [ADR 1](../docs/adr/ruleco-coordinator/0001-hexagonal-architecture.md) for rationale.
 
 ```
 ┌─────────────────────────────────────────────┐
 │          Application Layer (app)            │
-│  - Coordinator lifecycle management         │
-│  - Request/response handling                │
-│  - Uses ports defined below                 │
 └─────────────────┬───────────────────────────┘
-                  │
 ┌─────────────────▼───────────────────────────┐
 │             Domain Layer (core)             │
-│  - Routing logic (RoutingPort)              │
-│  - Directory management (DirectoryPort)     │
-│  - Error definitions                        │
-│  - Entity types (FullName, entries, etc.)   │
 └─────────────────┬───────────────────────────┘
-                  │
 ┌─────────────────▼───────────────────────────┐
 │            Transport Layer                  │
-│  - MessagePort: send/recv with Identity     │
-│  - ConnectionManagementPort: socket mgmt    │
+│  - MessagePort, ConnectionManagementPort    │
 │  - Implementations: ZmqAdapter, MockAdapter │
 └─────────────────────────────────────────────┘
 ```
 
-### Core Logic
+**Core**: `CoordinatorCore` — pure routing logic, independent of implementation details.
 
-- **CoordinatorCore**: Contains the pure business logic for message routing, independent of any specific implementation details.
+**Ports**: `MessagePort`, `ConnectionManagementPort`, `RoutingPort`, `DirectoryPort`, `ClockPort`.
 
-### Ports (Interfaces)
-
-- **MessagePort**: Interface for sending and receiving messages from ZMQ sockets. Returns `Identity` enum indicating message source context (Local/Remote/SelfTarget).
-- **ConnectionManagementPort**: Interface for managing network connections (bind ROUTER, connect/disconnect DEALER).
-- **RoutingPort**: Interface for routing messages based on sender/receiver names and transport context.
-- **DirectoryPort**: Interface for component/coordinator directory management with identity tracking.
-- **ClockPort**: Interface for time-related operations.
-
-### Adapters (Implementations)
-
-- **ZmqAdapter**: Implements `MessagePort` and `ConnectionManagementPort` using ZeroMQ sockets. Handles socket polling and identity tracking.
-- **MockAdapter**: Implements same ports for testing without network dependencies.
-- **InMemoryDirectoryAdapter**: Implements `DirectoryPort` with in-memory storage.
-- **SystemClockAdapter**: Implements `ClockPort` using system time.
+**Adapters**: `ZmqAdapter`, `MockAdapter`, `InMemoryDirectoryAdapter`, `SystemClockAdapter`.
 
 ## Transport Layer: Identity Enum
 
-The `Identity` enum provides critical transport-layer context for routing decisions:
-
-```rust
-pub enum Identity {
-    Local { identity: Vec<u8> },      // From ROUTER socket, requires validation
-    Remote { identity: Vec<u8> },     // From DEALER socket, already authenticated
-    SelfTarget,                        // Internal loopback
-}
-```
-
-**Why this matters:**
-
-- **ROUTER socket** adds identity frames for connected components → `Identity::Local`
-  - These components MUST be validated against directory (sign-in check, identity match)
-- **DEALER sockets** connect to remote coordinators → `Identity::Remote`
-  - Remote coordinators are already authenticated via DEALER connection
-  - No validation needed - bypass local namespace checks
-- **Internal** loopback can target coordinator itself → `Identity::SelfTarget`
-
-Without this enum distinction, routing logic cannot properly:
-
-1. Validate local components (prevent spoofing)
-2. Trust remote coordinators (avoid duplicate authentication)
-3. Handle self-targeted messages correctly
+Messages are tagged with an `Identity` enum (`Local`/`Remote`/`SelfTarget`) indicating their transport origin, which determines how routing validates them. See [ADR 2](../docs/adr/ruleco-coordinator/0002-identity-enum-for-transport-context.md) for rationale.
 
 ## Protocol Layering
 
