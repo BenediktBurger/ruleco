@@ -29,15 +29,18 @@
 
 ## Relevant files / directories
 
-- `/home/benediktb/Repositories/ruleco/docs/control_protocol.md` - Protocol specification
-- `/home/benediktb/Repositories/ruleco/ruleco-coordinator/src/jsonrpc_handler.rs` - JSON-RPC handlers including `handle_remove_expired_addresses`
-- `/home/benediktb/Repositories/ruleco/ruleco-coordinator/src/core/parameter_types.rs` - Parameter types including `RemoveExpiredAddressesParams`
+- `docs/control_protocol.md` - Protocol specification
+- `docs/schemas/` - OpenRPC method definitions (component, actor, coordinator)
+- `ruleco-coordinator/src/jsonrpc_handler.rs` - JSON-RPC handlers including `handle_remove_expired_addresses`
+- `ruleco-coordinator/src/core/parameter_types.rs` - Parameter types including `RemoveExpiredAddressesParams`
 
 ## Next steps
 
 1. Phase 6 complete - all implementable tests passing
-2. Remaining 3 ignored tests require heartbeat/timeout infrastructure:
+2. Create `ruleco-actor` crate (see `docs/implementation-plan-ruleco-actor.md`)
+3. E2E tests with `TestActor` + CLI smoke tests
+4. Remaining 3 ignored tests require heartbeat/timeout infrastructure:
    - Active background task for periodic timeout checking
    - Coordinator-initiated ping mechanism
    - Bidirectional coordinator timeout detection
-3. These features are documented as TODO in app.rs:77
+5. These features are documented as TODO in app.rs:77
