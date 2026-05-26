@@ -12,6 +12,7 @@ use ruleco_core::full_name::FullName;
 use ruleco_core::message::{ConversationId, MessageBuilder};
 use ruleco_core::protocol_constants::MessageType;
 use serde_json::Value;
+use std::str::FromStr;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use zmq::{Socket, POLLIN};

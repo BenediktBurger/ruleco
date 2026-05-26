@@ -18,6 +18,7 @@ use ruleco_core::full_name::FullName;
 use ruleco_core::message::{ConversationId, MessageBuilder, MessageView};
 use ruleco_core::protocol_constants::MessageType;
 use serde_json::Value;
+use std::str::FromStr;
 use std::borrow::Cow;
 use std::time::Duration;
 

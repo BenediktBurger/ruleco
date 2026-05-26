@@ -346,6 +346,7 @@ impl Coordinator {
 mod test {
     use ruleco_legacy::control_protocol::communicator::Communicator;
     use serde_json::Value;
+    use std::str::FromStr;
 
     use super::*;
 

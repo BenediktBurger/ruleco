@@ -1,4 +1,5 @@
 use std::fmt;
+use std::str::FromStr;
 
 /// Error type for `FullName` parsing.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -141,46 +142,9 @@ impl FullName {
         !self.namespace.is_empty()
     }
 
-    /// Convert the FullName into a string in the format "namespace"."name"
-    pub fn to_string(&self) -> String {
-        let namespace_str = std::str::from_utf8(&self.namespace).unwrap_or("");
-        let name_str = std::str::from_utf8(&self.name).unwrap_or("");
 
-        if self.has_namespace() {
-            format!("{namespace_str}.{name_str}")
-        } else {
-            name_str.to_string()
-        }
-    }
 
-    /// Create a `FullName` from a string slice.
-    ///
-    /// This is a convenience method, primarily intended for testing,
-    /// equivalent to `FullName::from_slice(s.as_bytes())`.
-    ///
-    /// # Arguments
-    ///
-    /// * `s` - A string slice representing the full name.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(FullName)` - If the string represents a valid full name.
-    /// * `Err(FullNameError)` - If the string is invalid.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ruleco_core::full_name::{FullName, FullNameError};
-    ///
-    /// let full_name = FullName::from_str("namespace.component").unwrap();
-    /// assert_eq!(full_name.namespace(), b"namespace");
-    /// assert_eq!(full_name.name(), b"component");
-    ///
-    /// assert_eq!(FullName::from_str("invalid..format"), Err(FullNameError::InvalidFormat));
-    /// ```
-    pub fn from_str(s: &str) -> Result<Self, FullNameError> {
-        Self::from_slice(s.as_bytes())
-    }
+
 
     /// Convert the `FullName` into a `Vec<u8>` representation.
     ///
@@ -194,6 +158,7 @@ impl FullName {
     ///
     /// ```
     /// use ruleco_core::full_name::FullName;
+    /// use std::str::FromStr;
     ///
     /// let full_name = FullName::from_str("namespace.component").unwrap();
     /// let bytes = full_name.to_vec();
@@ -261,6 +226,26 @@ impl FullName {
     }
 }
 
+impl fmt::Display for FullName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let namespace_str = std::str::from_utf8(&self.namespace).unwrap_or("");
+        let name_str = std::str::from_utf8(&self.name).unwrap_or("");
+        if self.has_namespace() {
+            write!(f, "{namespace_str}.{name_str}")
+        } else {
+            write!(f, "{name_str}")
+        }
+    }
+}
+
+impl FromStr for FullName {
+    type Err = FullNameError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_slice(s.as_bytes())
+    }
+}
+
 /// Validate that a name part (namespace or component name) conforms to LECO rules.
 /// Printable ASCII (0x20 to 0x7E) and not '.' (0x2E).
 fn validate_part(part: &[u8]) -> Result<(), FullNameError> {
@@ -275,6 +260,7 @@ fn validate_part(part: &[u8]) -> Result<(), FullNameError> {
 #[cfg(test)]
 mod test {
     use super::{FullName, FullNameError};
+    use std::str::FromStr;
 
     #[test]
     fn test_full_name_with_namespace() {

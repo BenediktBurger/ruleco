@@ -8,6 +8,7 @@
 
 mod common;
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use common::{
     assert_error_data, assert_error_response, assert_jsonrpc_valid, assert_success_response,

@@ -536,6 +536,7 @@ where
 mod tests {
     use super::*;
     use crate::adapters::MockAdapter;
+    use std::str::FromStr;
 
     /// Helper function to format message frames for human-readable debug output
     fn format_message_frames(frames: &[Vec<u8>]) -> String {

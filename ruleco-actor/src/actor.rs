@@ -9,6 +9,7 @@ use ruleco_core::message::{MessageBuilder, MessageView};
 use ruleco_core::protocol_constants::MessageType;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;

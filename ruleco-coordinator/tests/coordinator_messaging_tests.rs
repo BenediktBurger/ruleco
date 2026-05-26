@@ -6,6 +6,7 @@
 //! - Coordinator methods (docs/schemas/coordinator.json)
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::thread;
 use std::time::Duration;
 
