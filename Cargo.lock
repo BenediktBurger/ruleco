@@ -805,6 +805,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruleco-actor"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "jsonrpsee-types",
+ "log",
+ "rstest",
+ "ruleco-core",
+ "serde",
+ "serde_json",
+ "zmq",
+]
+
+[[package]]
 name = "ruleco-coordinator"
 version = "0.0.0"
 dependencies = [
@@ -819,6 +834,7 @@ dependencies = [
  "log",
  "mockall",
  "rstest",
+ "ruleco-actor",
  "ruleco-core",
  "serde",
  "serde_json",
