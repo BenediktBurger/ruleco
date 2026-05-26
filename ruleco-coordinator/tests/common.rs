@@ -62,18 +62,18 @@ impl TestCoordinator {
         port: Option<u16>,
         timeout_interval: Option<u64>,
     ) -> Self {
-        let port = port.unwrap_or_else(|| find_free_port());
+        let port = port.unwrap_or_else(find_free_port);
         let namespace = namespace.to_string();
 
         let thread_namespace = namespace.clone();
         let thread = thread::spawn(move || -> Result<(), String> {
             let mut coordinator =
                 CoordinatorApp::new(&thread_namespace, Some(port), timeout_interval)
-                    .map_err(|e| format!("Failed to create coordinator: {}", e))?;
+                    .map_err(|e| format!("Failed to create coordinator: {e}"))?;
             let (_shutdown_tx, shutdown_rx) = crossbeam_channel::bounded::<()>(1);
             coordinator
                 .run(shutdown_rx)
-                .map_err(|e| format!("Coordinator run failed: {}", e))
+                .map_err(|e| format!("Coordinator run failed: {e}"))
         });
 
         Self {
@@ -138,7 +138,7 @@ where
         if thread.is_finished() {
             let inner_result = thread
                 .join()
-                .map_err(|e| format!("Thread panicked: {:?}", e))?;
+                .map_err(|e| format!("Thread panicked: {e:?}"))?;
             return inner_result.map_err(|e| e.to_string());
         }
 
@@ -178,7 +178,7 @@ impl TestClient {
         let context = zmq::Context::new();
         let dealer = context.socket(zmq::DEALER)?;
 
-        dealer.connect(&format!("tcp://127.0.0.1:{}", port))?;
+        dealer.connect(&format!("tcp://127.0.0.1:{port}"))?;
 
         Ok(Self {
             dealer,
@@ -226,7 +226,7 @@ impl TestClient {
     fn next_message_id(&self) -> [u8; 3] {
         let counter = self
             .message_id_counter
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst) as u32;
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         counter.to_be_bytes()[1..4].try_into().unwrap()
     }
 
@@ -257,7 +257,7 @@ impl TestClient {
 
         let default_receiver = Self::create_coordinator_receiver();
         let message = MessageBuilder::new()
-            .receiver(receiver.unwrap_or_else(|| &default_receiver).clone())
+            .receiver(receiver.unwrap_or(&default_receiver).clone())
             .sender(sender.clone())
             .conversation_id(ConversationId::new())
             .payload_json(&request)?
@@ -360,13 +360,13 @@ impl TestClient {
             let sender_fullname = view
                 .sender()
                 .as_ref()
-                .map_err(|e| format!("Invalid sender: {}", e))?
+                .map_err(|e| format!("Invalid sender: {e}"))?
                 .clone();
             let namespace_bytes = sender_fullname.namespace();
             if !namespace_bytes.is_empty() {
                 self.namespace = Some(
                     std::str::from_utf8(namespace_bytes)
-                        .map_err(|e| format!("Invalid UTF-8 in namespace: {}", e))?
+                        .map_err(|e| format!("Invalid UTF-8 in namespace: {e}"))?
                         .to_string(),
                 );
             } else if let Some(ns) = coordinator_namespace {
@@ -408,7 +408,7 @@ impl TestClient {
         thread::sleep(Duration::from_millis(500));
 
         if let Err(e) = self.receive_jsonrpc_response(1000) {
-            eprintln!("No response to shut_down: {:?}", e);
+            eprintln!("No response to shut_down: {e:?}");
         }
 
         Ok(())
@@ -434,20 +434,18 @@ pub fn extract_response(response_frames: &[Vec<u8>]) -> Value {
     let content = &response_frames[4];
     let response: serde_json::Value =
         serde_json::from_slice(content).expect("Failed to parse JSON-RPC response");
-    return response;
+    response
 }
 
 /// Assert that a JSON-RPC response is successful (contains "result")
 pub fn assert_success_response(response: &Value) {
     assert!(
         response.get("result").is_some(),
-        "Response should contain 'result', got: {:?}",
-        response
+        "Response should contain 'result', got: {response:?}"
     );
     assert!(
         response.get("error").is_none(),
-        "Response should not contain 'error', got: {:?}",
-        response
+        "Response should not contain 'error', got: {response:?}"
     );
 }
 
@@ -463,8 +461,7 @@ pub fn assert_error_response(response: &Value, expected_code: i32) {
 
     assert_eq!(
         code, expected_code,
-        "Expected error code {}, got {}",
-        expected_code, code
+        "Expected error code {expected_code}, got {code}"
     );
 }
 
@@ -480,9 +477,7 @@ pub fn assert_error_data(response: &Value, expected_data: &str) {
 
     assert!(
         data.contains(expected_data),
-        "Expected error data to contain '{}', got '{}'",
-        expected_data,
-        data
+        "Expected error data to contain '{expected_data}', got '{data}'"
     );
 }
 
@@ -502,7 +497,7 @@ where
         }
         thread::sleep(poll_interval);
     }
-    Err(format!("Condition not met within {:?}", timeout))
+    Err(format!("Condition not met within {timeout:?}"))
 }
 
 /// Wait for coordinator to be ready by polling with ping
@@ -517,7 +512,7 @@ pub fn wait_for_coordinator(
         }
         thread::sleep(Duration::from_millis(10));
     }
-    Err(format!("Coordinator not ready after {} attempts", max_attempts).into())
+    Err(format!("Coordinator not ready after {max_attempts} attempts").into())
 }
 
 /// Assert that JSON-RPC 2.0 requirements are met

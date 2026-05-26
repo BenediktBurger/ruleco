@@ -60,13 +60,13 @@ fn create_default_core() -> CoordinatorCore<InMemoryDirectoryAdapter, SystemCloc
     };
     directory.register_coordinator(coordinator).unwrap();
 
-    let core = CoordinatorCore::new(
+    
+    CoordinatorCore::new(
         namespace,
         "tcp://127.0.0.1:12300".to_string(),
         directory,
         clock,
-    );
-    core
+    )
 }
 
 fn local_identity(identity: &[u8]) -> Identity {
@@ -108,9 +108,9 @@ fn test_route_message_from_remote_coordinator_without_validation() {
             Identity::Component { identity } => {
                 assert_eq!(identity.as_slice(), COMPONENT1_IDENTITY);
             }
-            _ => panic!("Expected Identity::Local, got {:?}", target_identity),
+            _ => panic!("Expected Identity::Local, got {target_identity:?}"),
         },
-        Err(e) => panic!("Expected Ok(Identity), got Err: {:?}", e),
+        Err(e) => panic!("Expected Ok(Identity), got Err: {e:?}"),
     }
 }
 
@@ -158,7 +158,7 @@ fn test_message_from_local_component_signed_in_via_dealer() {
         Ok(Identity::SelfTarget) => {
             // This is expected for messages addressed to coordinator
         }
-        _ => panic!("Expected SelfTarget routing decision, got {:?}", decision),
+        _ => panic!("Expected SelfTarget routing decision, got {decision:?}"),
     }
 }
 
@@ -185,9 +185,9 @@ fn test_route_message_from_local_to_local_component() {
             Identity::Component { identity } => {
                 assert_eq!(identity.as_slice(), COMPONENT2_IDENTITY);
             }
-            _ => panic!("Expected Identity::Local, got {:?}", target_identity),
+            _ => panic!("Expected Identity::Local, got {target_identity:?}"),
         },
-        _ => panic!("Expected Local routing decision, got {:?}", decision),
+        _ => panic!("Expected Local routing decision, got {decision:?}"),
     }
 }
 
@@ -213,9 +213,9 @@ fn test_route_message_to_local_component_without_namespace_in_receiver() {
             Identity::Component { identity } => {
                 assert_eq!(identity.as_slice(), COMPONENT2_IDENTITY);
             }
-            _ => panic!("Expected Identity::Local, got {:?}", target_identity),
+            _ => panic!("Expected Identity::Local, got {target_identity:?}"),
         },
-        _ => panic!("Expected Local routing decision, got {:?}", decision),
+        _ => panic!("Expected Local routing decision, got {decision:?}"),
     }
 }
 
@@ -250,7 +250,7 @@ fn test_route_sign_in_message_to_coordinator() {
         Ok(Identity::SelfTarget) => {
             // This is expected for sign-in messages to the coordinator
         }
-        _ => panic!("Expected SelfTarget routing decision, got {:?}", decision),
+        _ => panic!("Expected SelfTarget routing decision, got {decision:?}"),
     }
 }
 
@@ -278,11 +278,10 @@ fn test_route_message_to_remote_component() {
                 assert_eq!(identity.as_slice(), DEALER_IDENTITY);
             }
             _ => panic!(
-                "Expected Identity::Remote, got {:?}",
-                target_dealer_identity
+                "Expected Identity::Remote, got {target_dealer_identity:?}"
             ),
         },
-        Err(e) => panic!("Expected Ok(Identity), got Err: {:?}", e),
+        Err(e) => panic!("Expected Ok(Identity), got Err: {e:?}"),
     }
 }
 
@@ -311,9 +310,9 @@ fn test_route_message_from_remote_component() {
             Identity::Component { identity } => {
                 assert_eq!(identity.as_slice(), COMPONENT1_IDENTITY);
             }
-            _ => panic!("Expected Identity::Local, got {:?}", target_identity),
+            _ => panic!("Expected Identity::Local, got {target_identity:?}"),
         },
-        _ => panic!("Expected Local routing decision, got {:?}", decision),
+        _ => panic!("Expected Local routing decision, got {decision:?}"),
     }
 }
 
@@ -360,15 +359,14 @@ fn test_route_non_sign_in_message_from_unregistered_component_to_coordinator(
                             ruleco_core::errors::LecoError::NotSignedIn { .. } => {
                                 // This is what we expect
                             }
-                            _ => panic!("Expected NotSignedIn error, got {:?}", leco_error),
+                            _ => panic!("Expected NotSignedIn error, got {leco_error:?}"),
                         }
                     }
-                    _ => panic!("Expected Leco error, got {:?}", error),
+                    _ => panic!("Expected Leco error, got {error:?}"),
                 }
             }
             _ => panic!(
-                "Expected Error routing decision for local unregistered component, got {:?}",
-                decision
+                "Expected Error routing decision for local unregistered component, got {decision:?}"
             ),
         }
     } else {
@@ -383,8 +381,7 @@ fn test_route_non_sign_in_message_from_unregistered_component_to_coordinator(
             match decision {
                 Ok(Identity::SelfTarget) => {}
                 _ => panic!(
-                    "Expected SelfTarget for remote component message to coordinator, got {:?}",
-                    decision
+                    "Expected SelfTarget for remote component message to coordinator, got {decision:?}"
                 ),
             }
         } else {
@@ -394,10 +391,10 @@ fn test_route_non_sign_in_message_from_unregistered_component_to_coordinator(
                         Identity::Component { identity } => {
                             assert_eq!(identity.as_slice(), COMPONENT1_IDENTITY);
                         }
-                        _ => panic!("Expected Identity::Local, got {:?}", target_identity),
+                        _ => panic!("Expected Identity::Local, got {target_identity:?}"),
                     }
                 }
-                _ => panic!("Expected Local routing decision for remote component message to local component, got {:?}", decision),
+                _ => panic!("Expected Local routing decision for remote component message to local component, got {decision:?}"),
             }
         }
     }
@@ -448,7 +445,7 @@ fn test_handle_coordinator_sign_in_success_registers_coordinator() {
         Ok(Identity::Coordinator { identity }) => {
             assert_eq!(identity.as_slice(), dealer_identity);
         }
-        _ => panic!("Expected Coordinator routing decision, got {:?}", decision),
+        _ => panic!("Expected Coordinator routing decision, got {decision:?}"),
     }
 }
 

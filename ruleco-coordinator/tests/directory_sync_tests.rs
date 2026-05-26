@@ -34,7 +34,7 @@ fn send_nodes_method() {
         .expect("Failed to sign in");
 
     // Request nodes from coordinator
-    let _ = client
+    client
         .send_jsonrpc_request("send_nodes", None, Some(1), None)
         .expect("Failed to send send_nodes");
 
@@ -52,7 +52,7 @@ fn send_nodes_method() {
     // Result should be an object (even if empty)
     assert!(result.is_object(), "Result should be an object");
 
-    let _ = client.send_shutdown(None).expect("Failed to send shutdown");
+    client.send_shutdown(None).expect("Failed to send shutdown");
     std::thread::sleep(Duration::from_millis(500));
     coordinator
         .join_thread(Duration::from_secs(5))
@@ -95,7 +95,7 @@ fn send_nodes_with_known_coordinators() {
     thread::sleep(Duration::from_millis(300));
 
     // Request nodes from N1
-    let _ = client
+    client
         .send_jsonrpc_request("send_nodes", None, Some(2), None)
         .expect("Failed to send send_nodes");
 
@@ -116,7 +116,7 @@ fn send_nodes_with_known_coordinators() {
     assert!(nodes.contains_key(namespaces::N2), "Should have N2");
     assert!(nodes.contains_key(namespaces::N3), "Should have N3");
 
-    let _ = client.send_shutdown(None).expect("Failed to send shutdown");
+    client.send_shutdown(None).expect("Failed to send shutdown");
 
     // Shutdown N2 and N3
     let mut client_n2 =
@@ -175,7 +175,7 @@ fn record_components_method() {
         "components": remote_components
     });
 
-    let _ = client
+    client
         .send_jsonrpc_request("record_components", Some(params), Some(1), None)
         .expect("Failed to send record_components");
 
@@ -187,7 +187,7 @@ fn record_components_method() {
     // Should receive error because sender is not a registered coordinator
     assert_error_response(&response, -32602);
 
-    let _ = client.send_shutdown(None).expect("Failed to send shutdown");
+    client.send_shutdown(None).expect("Failed to send shutdown");
     std::thread::sleep(Duration::from_millis(500));
     coordinator_n1
         .join_thread(Duration::from_secs(5))
@@ -223,7 +223,7 @@ fn send_local_components_method() {
         .sign_in("query_component", Some(&coordinator.namespace))
         .expect("Failed to sign in query");
 
-    let _ = query_client
+    query_client
         .send_jsonrpc_request("send_local_components", None, Some(1), None)
         .expect("Failed to send send_local_components");
 
@@ -256,7 +256,7 @@ fn send_local_components_method() {
         "Should contain component CB"
     );
 
-    let _ = query_client
+    query_client
         .send_shutdown(None)
         .expect("Failed to send shutdown");
     std::thread::sleep(Duration::from_millis(500));
@@ -300,7 +300,7 @@ fn send_global_components_method() {
         .sign_in("query", Some(&coordinator_n1.namespace))
         .expect("Failed to sign in query");
 
-    let _ = query_client
+    query_client
         .send_jsonrpc_request("send_global_components", None, Some(1), None)
         .expect("Failed to send send_global_components");
 
@@ -329,7 +329,7 @@ fn send_global_components_method() {
     // After coordinator sign-in, should also have N2 components
     // (Implementation TBD)
 
-    let _ = query_client
+    query_client
         .send_shutdown(None)
         .expect("Failed to send shutdown");
     std::thread::sleep(Duration::from_millis(500));
@@ -337,7 +337,7 @@ fn send_global_components_method() {
         .join_thread(Duration::from_secs(5))
         .expect("Failed to join N1");
     // N2 needs to be shut down via a client that signed in
-    let _ = client_n2_ca
+    client_n2_ca
         .send_shutdown(None)
         .expect("Failed to send shutdown to N2");
     coordinator_n2
@@ -395,7 +395,7 @@ fn directory_sync_on_component_sign_in() {
         .sign_in("query", Some(&coordinator_n2.namespace))
         .expect("Failed to sign in query");
 
-    let _ = query_client
+    query_client
         .send_jsonrpc_request("send_global_components", None, Some(1), None)
         .expect("Failed to send send_global_components");
 
@@ -419,12 +419,12 @@ fn directory_sync_on_component_sign_in() {
     // N1.CA should be in N2's global directory
     let has_ca = n1_components
         .iter()
-        .any(|v| v.as_str().map_or(false, |s| s.contains(components::CA)));
+        .any(|v| v.as_str().is_some_and(|s| s.contains(components::CA)));
 
     assert!(has_ca, "N2 should know about N1.CA after sync");
 
-    let _ = client.send_shutdown(None).expect("Failed to send shutdown");
-    let _ = query_client
+    client.send_shutdown(None).expect("Failed to send shutdown");
+    query_client
         .send_shutdown(None)
         .expect("Failed to send shutdown to N2");
     std::thread::sleep(Duration::from_millis(500));
@@ -489,7 +489,7 @@ fn directory_sync_on_component_sign_out() {
         .expect("Failed to sign in query");
 
     // Query global from N2
-    let _ = query_client
+    query_client
         .send_jsonrpc_request("send_global_components", None, Some(1), None)
         .expect("Failed to send send_global_components");
 
@@ -508,7 +508,7 @@ fn directory_sync_on_component_sign_out() {
 
     let has_ca_before = n1_components
         .iter()
-        .any(|v| v.as_str().map_or(false, |s| s.contains(components::CA)));
+        .any(|v| v.as_str().is_some_and(|s| s.contains(components::CA)));
     assert!(has_ca_before, "N2 should know about CA initially");
 
     // CA signs out from N1
@@ -517,7 +517,7 @@ fn directory_sync_on_component_sign_out() {
     thread::sleep(Duration::from_millis(300));
 
     // Query N2's directory again
-    let _ = query_client
+    query_client
         .send_jsonrpc_request("send_global_components", None, Some(2), None)
         .expect("Failed to send send_global_components");
 
@@ -536,14 +536,14 @@ fn directory_sync_on_component_sign_out() {
 
     let has_ca_after = n1_components2
         .iter()
-        .any(|v| v.as_str().map_or(false, |s| s.contains(components::CA)));
+        .any(|v| v.as_str().is_some_and(|s| s.contains(components::CA)));
 
     assert!(!has_ca_after, "N2 should have removed CA after sign-out");
 
-    let _ = client_n1
+    client_n1
         .send_shutdown(None)
         .expect("Failed to send shutdown to N1");
-    let _ = query_client
+    query_client
         .send_shutdown(None)
         .expect("Failed to send shutdown to N2");
     std::thread::sleep(Duration::from_millis(500));
@@ -574,7 +574,7 @@ fn remove_expired_addresses_method() {
         "expiration_time": 3600  // 1 hour
     });
 
-    let _ = client
+    client
         .send_jsonrpc_request("remove_expired_addresses", Some(params), Some(1), None)
         .expect("Failed to send remove_expired_addresses");
 
@@ -586,7 +586,7 @@ fn remove_expired_addresses_method() {
     assert_success_response(&response);
 
     // Query local components - CA should still be there
-    let _ = client
+    client
         .send_jsonrpc_request("send_local_components", None, Some(2), None)
         .expect("Failed to send send_local_components");
 
@@ -603,7 +603,7 @@ fn remove_expired_addresses_method() {
     // Depending on implementation, CA may or may not be present here
     // Test primarily checks method is callable
 
-    let _ = client.send_shutdown(None).expect("Failed to send shutdown");
+    client.send_shutdown(None).expect("Failed to send shutdown");
     std::thread::sleep(Duration::from_millis(500));
     coordinator
         .join_thread(Duration::from_secs(5))
@@ -626,7 +626,7 @@ fn rapid_component_sign_ins_directory_sync(#[case] num_components: usize) {
 
     // Create and sign in multiple components rapidly
     for i in 0..num_components {
-        let component_name = format!("component_{}", i);
+        let component_name = format!("component_{i}");
         let mut client = TestClient::connect(coordinator.port).expect("Failed to create client");
         client
             .sign_in(&component_name, Some(&coordinator.namespace))
@@ -642,7 +642,7 @@ fn rapid_component_sign_ins_directory_sync(#[case] num_components: usize) {
         .sign_in("query", Some(&coordinator.namespace))
         .expect("Failed to sign in query");
 
-    let _ = query
+    query
         .send_jsonrpc_request("send_local_components", None, Some(1), None)
         .expect("Failed to send send_local_components");
 
@@ -659,11 +659,10 @@ fn rapid_component_sign_ins_directory_sync(#[case] num_components: usize) {
     // Should have at least the signed-in components
     assert!(
         components.len() >= num_components,
-        "Should have at least {} components",
-        num_components
+        "Should have at least {num_components} components"
     );
 
-    let _ = query.send_shutdown(None).expect("Failed to send shutdown");
+    query.send_shutdown(None).expect("Failed to send shutdown");
 
     // Clean up clients first
     for mut client in clients {

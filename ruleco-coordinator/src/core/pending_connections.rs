@@ -22,6 +22,12 @@ pub struct PendingConnectionInfo {
     pub initiated_at: std::time::Instant,
 }
 
+impl Default for PendingConnections {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PendingConnections {
     /// Create a new empty pending connections tracker
     pub fn new() -> Self {

@@ -21,8 +21,7 @@ impl fmt::Display for FullNameError {
             ),
             FullNameError::InvalidCharacter(c) => write!(
                 f,
-                "Invalid character with byte value 0x{:02X} found in name part",
-                c
+                "Invalid character with byte value 0x{c:02X} found in name part"
             ),
             FullNameError::EmptyPart => write!(f, "Namespace or component name cannot be empty"),
         }
@@ -148,7 +147,7 @@ impl FullName {
         let name_str = std::str::from_utf8(&self.name).unwrap_or("");
 
         if self.has_namespace() {
-            format!("{}.{}", namespace_str, name_str)
+            format!("{namespace_str}.{name_str}")
         } else {
             name_str.to_string()
         }

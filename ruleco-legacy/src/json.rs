@@ -68,7 +68,7 @@ pub fn to_vec(obj: &impl Serialize) -> Vec<u8> {
 pub fn is_sign_in(slice: &[u8]) -> bool {
     match serde_json::from_slice::<Request>(slice) {
         Err(_) => false,
-        Ok(request) => request.method == String::from("sign_in"),
+        Ok(request) => request.method == "sign_in",
     }
 }
 

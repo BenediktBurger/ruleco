@@ -34,6 +34,7 @@ impl Default for ConversationId {
 
 /// Represent a Message ID (3 bytes)
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub struct MessageId(pub [u8; 3]);
 
 impl MessageId {
@@ -48,16 +49,11 @@ impl MessageId {
     }
 }
 
-impl Default for MessageId {
-    fn default() -> Self {
-        Self([0, 0, 0])
-    }
-}
 
 /// Create a new conversation id
 pub fn create_conversation_id() -> [u8; 16] {
     let uuid = Uuid::now_v7();
-    return uuid.into_bytes();
+    uuid.into_bytes()
 }
 
 /// Header information for a message (owned)
@@ -131,7 +127,7 @@ impl From<MessageError> for io::Error {
     fn from(err: MessageError) -> io::Error {
         match err {
             MessageError::Io(io_err) => io_err,
-            _ => io::Error::new(io::ErrorKind::Other, err),
+            _ => io::Error::other(err),
         }
     }
 }
@@ -160,8 +156,7 @@ impl MessageView {
             return Err(MessageError::InvalidFrameCount);
         }
 
-        let version_byte = *frames[0]
-            .get(0)
+        let version_byte = *frames[0].first()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Missing version byte"))?;
 
         // Parse FullName instances, which now own their data.
@@ -326,8 +321,7 @@ impl Message {
             return Err(MessageError::InvalidFrameCount);
         }
 
-        let version = *frames[0]
-            .get(0)
+        let version = *frames[0].first()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Missing version byte"))?;
 
         // Validate receiver and sender by trying to parse them

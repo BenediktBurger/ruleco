@@ -20,7 +20,7 @@ impl DataMessage {
         };
         Self {
             topic: topic.as_bytes().to_vec(),
-            header: header,
+            header,
             payload: content,
         }
     }
@@ -62,11 +62,11 @@ impl DataPublisher {
         let ctx = zmq::Context::new();
         let socket = ctx.socket(zmq::PUB).unwrap();
         socket.connect(&format!("tcp://{addr}:{port}")).unwrap();
-        let publisher = Self {
+        
+        Self {
             name,
-            socket: socket,
-        };
-        publisher
+            socket,
+        }
     }
 
     /// Send a data message with some content
