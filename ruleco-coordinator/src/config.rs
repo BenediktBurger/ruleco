@@ -1,7 +1,8 @@
 use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
-use log::warn;
+use std::str::FromStr;
+use log::{LevelFilter, warn};
 
 #[derive(Debug, Deserialize)]
 struct RawConfig {
@@ -15,6 +16,8 @@ struct CoordinatorRawSettings {
     bind_address: Option<String>,
     public_address: Option<String>,
     port: Option<u16>,
+    data_publisher_addr: Option<String>,
+    log_publish_level: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +27,8 @@ pub struct CoordinatorConfig {
     pub bind_address: String,
     pub public_address: String,
     pub port: u16,
+    pub data_publisher_addr: Option<String>,
+    pub log_publish_level: LevelFilter,
 }
 
 impl Default for CoordinatorConfig {
@@ -34,8 +39,14 @@ impl Default for CoordinatorConfig {
             bind_address: "tcp://*:12300".to_string(),
             public_address: Self::get_public_address("12300"),
             port: 12300,
+            data_publisher_addr: None,
+            log_publish_level: LevelFilter::Info,
         }
     }
+}
+
+fn parse_level_filter(s: &str) -> Option<LevelFilter> {
+    LevelFilter::from_str(s).ok()
 }
 
 impl CoordinatorConfig {
@@ -77,6 +88,8 @@ impl CoordinatorConfig {
             bind_address: None,
             public_address: None,
             port: None,
+            data_publisher_addr: None,
+            log_publish_level: None,
         });
 
         let namespace = match coordinator_settings.namespace {
@@ -114,6 +127,12 @@ impl CoordinatorConfig {
             bind_address,
             public_address,
             port,
+            data_publisher_addr: coordinator_settings.data_publisher_addr,
+            log_publish_level: coordinator_settings
+                .log_publish_level
+                .as_deref()
+                .and_then(parse_level_filter)
+                .unwrap_or(default.log_publish_level),
         }
     }
 
@@ -127,6 +146,7 @@ impl CoordinatorConfig {
         dirs::config_dir().map(|p| p.join("ruleco").join("config.toml"))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_cli_overrides(
         mut self,
         namespace: Option<String>,
@@ -134,6 +154,8 @@ impl CoordinatorConfig {
         bind_address: Option<String>,
         public_address: Option<String>,
         timeout_interval: Option<u64>,
+        data_publisher_addr: Option<String>,
+        log_publish_level: Option<String>,
     ) -> Self {
         if let Some(ns) = namespace {
             self.namespace = ns;
@@ -160,6 +182,17 @@ impl CoordinatorConfig {
         }
         if let Some(interval) = timeout_interval {
             self.timeout_interval = interval;
+        }
+        if let Some(addr) = data_publisher_addr {
+            self.data_publisher_addr = Some(addr);
+        }
+        if let Some(level) = log_publish_level {
+            if let Some(parsed) = parse_level_filter(&level) {
+                self.log_publish_level = parsed;
+            } else {
+                warn!("Invalid log-publish-level '{level}', using Info");
+                self.log_publish_level = LevelFilter::Info;
+            }
         }
         self
     }
@@ -193,6 +226,8 @@ mod tests {
         let config = CoordinatorConfig::default();
         assert_eq!(config.namespace, "Default_Namespace");
         assert_eq!(config.timeout_interval, 10);
+        assert!(config.data_publisher_addr.is_none());
+        assert_eq!(config.log_publish_level, LevelFilter::Info);
     }
 
     #[test]
@@ -204,12 +239,16 @@ mod tests {
                 bind_address: None,
                 public_address: None,
                 port: None,
+                data_publisher_addr: None,
+                log_publish_level: None,
             }),
         };
 
         let config = CoordinatorConfig::from_raw(raw);
         assert_eq!(config.namespace, "test_namespace");
         assert_eq!(config.timeout_interval, 10);
+        assert!(config.data_publisher_addr.is_none());
+        assert_eq!(config.log_publish_level, LevelFilter::Info);
     }
 
     #[test]
@@ -221,6 +260,8 @@ mod tests {
                 bind_address: Some("tcp://*:5555".to_string()),
                 public_address: Some("tcp://192.168.1.100:5555".to_string()),
                 port: Some(5555),
+                data_publisher_addr: Some("tcp://localhost:11098".to_string()),
+                log_publish_level: Some("debug".to_string()),
             }),
         };
 
@@ -230,6 +271,8 @@ mod tests {
         assert_eq!(config.bind_address, "tcp://*:5555");
         assert_eq!(config.public_address, "tcp://192.168.1.100:5555");
         assert_eq!(config.port, 5555);
+        assert_eq!(config.data_publisher_addr, Some("tcp://localhost:11098".to_string()));
+        assert_eq!(config.log_publish_level, LevelFilter::Debug);
     }
 
     #[test]
@@ -241,6 +284,8 @@ mod tests {
         assert_eq!(config.timeout_interval, 10);
         assert_eq!(config.bind_address, "tcp://*:12300");
         assert_eq!(config.port, 12300);
+        assert!(config.data_publisher_addr.is_none());
+        assert_eq!(config.log_publish_level, LevelFilter::Info);
     }
 
     #[test]
@@ -252,6 +297,8 @@ mod tests {
                 bind_address: None,
                 public_address: None,
                 port: None,
+                data_publisher_addr: None,
+                log_publish_level: None,
             }),
         };
 
@@ -270,6 +317,8 @@ mod tests {
                 bind_address: Some("tcp://0.0.0.0:9999".to_string()),
                 public_address: Some("tcp://10.0.1.5:9999".to_string()),
                 port: None,
+                data_publisher_addr: None,
+                log_publish_level: None,
             }),
         };
 
@@ -283,5 +332,52 @@ mod tests {
     fn test_get_hostname() {
         let hostname = CoordinatorConfig::get_hostname();
         assert!(!hostname.is_empty());
+    }
+
+    #[test]
+    fn test_parse_level_filter_valid() {
+        assert_eq!(parse_level_filter("debug"), Some(LevelFilter::Debug));
+        assert_eq!(parse_level_filter("INFO"), Some(LevelFilter::Info));
+        assert_eq!(parse_level_filter("Warn"), Some(LevelFilter::Warn));
+        assert_eq!(parse_level_filter("error"), Some(LevelFilter::Error));
+        assert_eq!(parse_level_filter("off"), Some(LevelFilter::Off));
+        assert_eq!(parse_level_filter("trace"), Some(LevelFilter::Trace));
+    }
+
+    #[test]
+    fn test_parse_level_filter_invalid() {
+        assert_eq!(parse_level_filter("invalid"), None);
+        assert_eq!(parse_level_filter(""), None);
+    }
+
+    #[test]
+    fn test_apply_cli_overrides_data_publisher() {
+        let config = CoordinatorConfig::default()
+            .apply_cli_overrides(
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("tcp://localhost:11098".to_string()),
+                Some("warn".to_string()),
+            );
+        assert_eq!(config.data_publisher_addr, Some("tcp://localhost:11098".to_string()));
+        assert_eq!(config.log_publish_level, LevelFilter::Warn);
+    }
+
+    #[test]
+    fn test_apply_cli_overrides_invalid_level() {
+        let config = CoordinatorConfig::default()
+            .apply_cli_overrides(
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("nonsense".to_string()),
+            );
+        assert_eq!(config.log_publish_level, LevelFilter::Info);
     }
 }

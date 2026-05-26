@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossbeam_channel::{bounded, Receiver};
-use env_logger::{Builder, Env};
 use log::info;
 use ruleco_coordinator::app::CoordinatorApp;
 use ruleco_coordinator::config::CoordinatorConfig;
+use ruleco_coordinator::logging::{LoggingConfig, init_logger};
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use std::thread;
@@ -30,6 +30,12 @@ struct Args {
 
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
+
+    #[arg(long = "data-publisher-addr")]
+    data_publisher_addr: Option<String>,
+
+    #[arg(long = "log-publish-level", value_name = "LEVEL")]
+    log_publish_level: Option<String>,
 }
 
 fn setup_signal_handler() -> Result<Receiver<i32>> {
@@ -47,12 +53,6 @@ fn setup_signal_handler() -> Result<Receiver<i32>> {
 fn run() -> Result<()> {
     let args = Args::parse();
 
-    let log_level = if args.verbose { "debug" } else { "info" };
-    Builder::from_env(Env::default().default_filter_or(log_level)).init();
-
-    let signal_rx = setup_signal_handler()
-        .context("Failed to setup signal handlers")?;
-
     let config = CoordinatorConfig::load()
         .apply_cli_overrides(
             args.namespace,
@@ -60,7 +60,27 @@ fn run() -> Result<()> {
             args.bind_address,
             args.public_address,
             args.timeout_interval,
+            args.data_publisher_addr,
+            args.log_publish_level,
         );
+
+    let stderr_level = if args.verbose {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    };
+
+    let logging_config = LoggingConfig {
+        stderr_level,
+        publish_level: config.log_publish_level,
+        data_publisher_addr: config.data_publisher_addr.clone(),
+        topic: format!("{}.Coordinator", config.namespace),
+    };
+
+    let _ = init_logger(&logging_config);
+
+    let signal_rx = setup_signal_handler()
+        .context("Failed to setup signal handlers")?;
 
     info!(
         "Starting coordinator with namespace={}, bind={}, public={}, timeout={}s",

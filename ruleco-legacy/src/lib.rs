@@ -4,11 +4,8 @@
 
 pub mod core {
     pub use ruleco_core::full_name::FullName;
-    pub use ruleco_core::message::{create_conversation_id, ContentTypes};
 }
 
 pub mod control_protocol;
-
-pub mod data_protocol;
 
 pub mod json;

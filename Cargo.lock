@@ -848,6 +848,7 @@ name = "ruleco-core"
 version = "0.0.0"
 dependencies = [
  "jsonrpsee-types",
+ "log",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
