@@ -28,6 +28,8 @@ pub const DEFAULT_COORDINATOR_PORT: u16 = 12300;
 
 pub const DATA_HEADER_SIZE: usize = 17;
 
+/// Data protocol message types (separate from control protocol MessageType
+/// because they may diverge in the future)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum DataMessageType {

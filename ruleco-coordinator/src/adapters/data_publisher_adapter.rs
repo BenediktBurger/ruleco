@@ -3,6 +3,14 @@ use ruleco_core::data_message::DataMessage;
 use ruleco_core::log_record::LogRecord;
 use ruleco_core::protocol_constants::DataMessageType;
 
+use crate::core::ports::LogPublisher;
+
+/// ZMQ PUB socket adapter for publishing data protocol messages.
+///
+/// Note: ZMQ PUB sockets have a "slow joiner" problem — messages sent
+/// immediately after `connect()` may be dropped before the XSUB proxy's
+/// subscription handshake completes. Early coordinator log messages could
+/// be lost if a data proxy is not yet ready.
 pub struct DataPublisherAdapter {
     topic: String,
     socket: zmq::Socket,
@@ -28,18 +36,18 @@ impl DataPublisherAdapter {
         })
     }
 
-    pub fn publish(&self, message: DataMessage) -> Result<()> {
-        self.socket.send_multipart(message.into_frames(), 0)?;
-        Ok(())
-    }
-
     pub fn build_log_message(&self, record: &LogRecord) -> DataMessage {
-        DataMessage::new(&self.topic, DataMessageType::Json, vec![record.to_json_bytes()])
+        let content = vec![record.to_json_bytes().unwrap_or_default()];
+        DataMessage::new(&self.topic, DataMessageType::Json, content)
     }
+}
 
-    pub fn publish_log(&self, record: &LogRecord) -> Result<()> {
+impl LogPublisher for DataPublisherAdapter {
+    fn publish_log(&self, record: &LogRecord) -> Result<(), String> {
         let message = self.build_log_message(record);
-        self.publish(message)
+        self.socket
+            .send_multipart(message.into_frames(), 0)
+            .map_err(|e| e.to_string())
     }
 }
 

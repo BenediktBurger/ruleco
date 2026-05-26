@@ -10,6 +10,9 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
+    /// Map from the Rust `log` crate's level. Note: `log::Level` has no
+    /// `Critical` variant, so `LogLevel::Critical` can never be produced
+    /// by this mapping (only by parsing from external sources).
     pub fn from_log_level(level: log::Level) -> Self {
         match level {
             log::Level::Trace | log::Level::Debug => LogLevel::Debug,
@@ -41,6 +44,10 @@ pub struct LogRecord {
 }
 
 impl LogRecord {
+    /// Create a LogRecord from a `log::Record`.
+    ///
+    /// Timestamps are in UTC. The Python LECO ecosystem uses local time by default,
+    /// so subscribers should be aware of this difference.
     pub fn from_log_record(record: &log::Record) -> Self {
         let duration = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -65,14 +72,14 @@ impl LogRecord {
         }
     }
 
-    pub fn to_json_bytes(&self) -> Vec<u8> {
+    pub fn to_json_bytes(&self) -> Result<Vec<u8>, LogRecordError> {
         let arr = serde_json::json!([
             self.asctime,
             self.levelname.to_string(),
             self.name,
             self.text,
         ]);
-        serde_json::to_vec(&arr).unwrap_or_default()
+        Ok(serde_json::to_vec(&arr)?)
     }
 
     pub fn from_json_bytes(bytes: &[u8]) -> Result<Self, LogRecordError> {
@@ -169,7 +176,7 @@ mod tests {
             name: "recorder".to_string(),
             text: "Measurement started".to_string(),
         };
-        let bytes = record.to_json_bytes();
+        let bytes = record.to_json_bytes().unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(parsed.is_array());
         assert_eq!(parsed.as_array().unwrap().len(), 4);
@@ -187,7 +194,7 @@ mod tests {
             name: "recorder".to_string(),
             text: "Measurement started".to_string(),
         };
-        let bytes = record.to_json_bytes();
+        let bytes = record.to_json_bytes().unwrap();
         let parsed = LogRecord::from_json_bytes(&bytes).unwrap();
         assert_eq!(parsed.asctime, record.asctime);
         assert_eq!(parsed.levelname, record.levelname);

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use crossbeam_channel::{bounded, Receiver};
 use log::info;
+use ruleco_coordinator::adapters::{DataPublisherAdapter, SyncPublisher};
 use ruleco_coordinator::app::CoordinatorApp;
 use ruleco_coordinator::config::CoordinatorConfig;
 use ruleco_coordinator::logging::{LoggingConfig, init_logger};
@@ -77,7 +78,11 @@ fn run() -> Result<()> {
         topic: format!("{}.Coordinator", config.namespace),
     };
 
-    let _ = init_logger(&logging_config);
+    init_logger(&logging_config, |topic, addr| {
+        DataPublisherAdapter::new(topic, addr)
+            .map(SyncPublisher::new)
+            .map_err(|e| e.to_string())
+    })?;
 
     let signal_rx = setup_signal_handler()
         .context("Failed to setup signal handlers")?;

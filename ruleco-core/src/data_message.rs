@@ -50,11 +50,11 @@ impl DataMessage {
         }
         let topic = frames[0].clone();
         let header_bytes = &frames[1];
-        if header_bytes.len() < DATA_HEADER_SIZE {
-            return Err(DataMessageError::HeaderTooShort);
+        if header_bytes.len() != DATA_HEADER_SIZE {
+            return Err(DataMessageError::InvalidHeaderSize);
         }
         let mut header = [0u8; DATA_HEADER_SIZE];
-        header.copy_from_slice(&header_bytes[..DATA_HEADER_SIZE]);
+        header.copy_from_slice(header_bytes);
         let payload = frames[2..].to_vec();
         Ok(Self {
             topic,
@@ -68,8 +68,8 @@ impl DataMessage {
 pub enum DataMessageError {
     #[error("invalid frame count")]
     InvalidFrameCount,
-    #[error("header too short")]
-    HeaderTooShort,
+    #[error("invalid header size: expected {DATA_HEADER_SIZE} bytes")]
+    InvalidHeaderSize,
 }
 
 #[cfg(test)]
@@ -115,5 +115,27 @@ mod tests {
         assert_eq!(&frames[1][0..16], &conversation_id);
         assert_eq!(frames[1][16], 0x01);
         assert_eq!(frames[2], json_content.as_bytes());
+    }
+
+    #[test]
+    fn test_from_frames_rejects_oversized_header() {
+        let frames = vec![
+            b"N1.Sensor".to_vec(),
+            vec![0u8; 20],
+            b"content".to_vec(),
+        ];
+        let result = DataMessage::from_frames(frames);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_frames_rejects_undersized_header() {
+        let frames = vec![
+            b"N1.Sensor".to_vec(),
+            vec![0u8; 10],
+            b"content".to_vec(),
+        ];
+        let result = DataMessage::from_frames(frames);
+        assert!(result.is_err());
     }
 }
