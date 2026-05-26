@@ -1,0 +1,219 @@
+use std::i64;
+
+use crate::core::ports::message_port::Identity;
+use crate::core::ports::{ConnectionManagementPort, MessagePort};
+use anyhow::Result;
+use ruleco_core::message::ConversationId;
+use zmq;
+
+const DEALER_POLL_TIMEOUT_MS: i64 = 10;
+
+/// ZMQ implementation of the message port and connection management port
+pub struct ZmqAdapter {
+    /// The ZMQ context
+    context: zmq::Context,
+    /// The ROUTER socket for communicating with local components
+    router_socket: zmq::Socket,
+    /// The DEALER sockets for communicating with remote coordinators
+    dealer_sockets: std::collections::HashMap<Vec<u8>, zmq::Socket>,
+}
+
+impl Drop for ZmqAdapter {
+    fn drop(&mut self) {
+        let _ = self.router_socket.set_linger(0);
+        for socket in self.dealer_sockets.values() {
+            let _ = socket.set_linger(0);
+        }
+    }
+}
+
+impl ZmqAdapter {
+    /// Create a new ZMQ adapter
+    pub fn new() -> Result<Self> {
+        let context = zmq::Context::new();
+        let router_socket = context.socket(zmq::ROUTER)?;
+
+        Ok(Self {
+            context,
+            router_socket,
+            dealer_sockets: std::collections::HashMap::new(),
+        })
+    }
+
+    /// Connect to a remote coordinator
+    fn connect_to_coordinator_impl(
+        &mut self,
+        address: &str,
+    ) -> Result<Vec<u8>> {
+        let dealer_socket = self.context.socket(zmq::DEALER)?;
+        let connect_address = if address.starts_with("tcp://") {
+            address.to_string()
+        } else {
+            format!("tcp://{}", address)
+        };
+        let dealer_identity = ConversationId::new().as_bytes().to_vec();
+        dealer_socket.set_identity(&dealer_identity)?;
+        dealer_socket.connect(&connect_address)?;
+        self.dealer_sockets
+            .insert(dealer_identity.clone(), dealer_socket);
+        Ok(dealer_identity)
+    }
+
+    /// Disconnect from a remote coordinator
+    fn disconnect_from_coordinator_impl(
+        &mut self,
+        dealer_identity: &[u8],
+    ) -> Result<()> {
+        if let Some(socket) = self.dealer_sockets.remove(dealer_identity) {
+            let _ = socket.set_linger(0);
+            drop(socket);
+        }
+        Ok(())
+    }
+
+    /// Iterator over dealer sockets
+    fn dealer_sockets_iter(&self) -> impl Iterator<Item = (&Vec<u8>, &zmq::Socket)> {
+        self.dealer_sockets.iter()
+    }
+
+    /// Poll router socket for messages
+    fn poll_router(&self, timeout_ms: i64) -> Result<bool> {
+        let mut poll_items = vec![self.router_socket.as_poll_item(zmq::POLLIN)];
+        Ok(zmq::poll(&mut poll_items, timeout_ms)? > 0)
+    }
+
+    /// Receive a message from the router socket
+    fn receive_from_router(&self) -> Result<(Identity, Vec<Vec<u8>>)> {
+        let identity = self.router_socket.recv_bytes(0)?;
+        let frames = self.router_socket.recv_multipart(0)?;
+        Ok((Identity::Component { identity }, frames))
+    }
+
+    /// Poll dealer sockets for messages
+    fn poll_dealers(&self) -> Result<(Vec<usize>, Vec<Vec<u8>>)> {
+        let dealer_identities: Vec<Vec<u8>> = self
+            .dealer_sockets_iter()
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        if dealer_identities.is_empty() {
+            return Ok((Vec::new(), dealer_identities));
+        }
+
+        let mut poll_items = Vec::with_capacity(1 + dealer_identities.len());
+        poll_items.push(self.router_socket.as_poll_item(zmq::POLLIN));
+        for socket in self.dealer_sockets.values() {
+            poll_items.push(socket.as_poll_item(zmq::POLLIN));
+        }
+
+        let mut readable = Vec::new();
+        if zmq::poll(&mut poll_items[..], DEALER_POLL_TIMEOUT_MS)? > 0 {
+            for (i, item) in poll_items.iter().enumerate() {
+                if item.is_readable() {
+                    readable.push(i);
+                }
+            }
+        }
+
+        Ok((readable, dealer_identities))
+    }
+
+    /// Receive a message from a dealer socket
+    fn receive_from_dealer(
+        &self,
+        socket: &zmq::Socket,
+    ) -> Result<Vec<Vec<u8>>> {
+        let frames = socket.recv_multipart(0)?;
+        if frames.is_empty() {
+            anyhow::bail!("Invalid message format: no parts");
+        }
+        Ok(frames)
+    }
+}
+
+impl MessagePort for ZmqAdapter {
+    fn send(
+        &self,
+        dest_identity: &Identity,
+        frames: Vec<Vec<u8>>,
+    ) -> Result<()> {
+        match dest_identity {
+            Identity::Component { identity } => {
+                self.router_socket.send(identity, zmq::SNDMORE)?;
+                self.router_socket.send_multipart(frames, 0)?;
+            }
+            Identity::Coordinator { identity } => {
+                if let Some(socket) = self.dealer_sockets.get(identity) {
+                    socket.send_multipart(frames, 0)?;
+                } else {
+                    self.router_socket.send(identity, zmq::SNDMORE)?;
+                    self.router_socket.send_multipart(frames, 0)?;
+                }
+            }
+            Identity::SelfTarget => {
+                anyhow::bail!("Self-targeted messages should be handled internally");
+            }
+        }
+        Ok(())
+    }
+
+    fn recv(
+        &self,
+        timeout_ms: i64,
+    ) -> Result<Option<(Identity, Vec<Vec<u8>>)>> {
+        if self.poll_router(timeout_ms)? {
+            Ok(Some(self.receive_from_router()?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn recv_coordinator_sign_ins(
+        &self,
+    ) -> Result<Vec<(Identity, Vec<Vec<u8>>)>> {
+        let mut messages = Vec::new();
+        let (readable, dealer_ids) = self.poll_dealers()?;
+
+        for index in readable {
+            if index > 0 && index <= dealer_ids.len() {
+                let dealer_id = &dealer_ids[index - 1];
+                if let Some(socket) = self.dealer_sockets.get(dealer_id) {
+                    let frames = self.receive_from_dealer(socket)?;
+                    messages.push((
+                        Identity::Coordinator {
+                            identity: dealer_id.clone(),
+                        },
+                        frames,
+                    ));
+                }
+            }
+        }
+
+        Ok(messages)
+    }
+}
+
+impl ConnectionManagementPort for ZmqAdapter {
+    fn listen_for_components(&mut self, address: &str) -> Result<()> {
+        self.router_socket.bind(address)?;
+        Ok(())
+    }
+
+    /// Connect to a remote coordinator and return the assigned identity
+    ///
+    /// address: The address of the remote coordinator to connect to (e.g., "tcp://127.0.0.1:5555")
+    /// Returns: The identity assigned to the connection with the remote coordinator
+    fn connect_to_coordinator(
+        &mut self,
+        address: &str,
+    ) -> Result<Vec<u8>> {
+        self.connect_to_coordinator_impl(address)
+    }
+
+    fn disconnect_from_coordinator(
+        &mut self,
+        identity: &[u8],
+    ) -> Result<()> {
+        self.disconnect_from_coordinator_impl(identity)
+    }
+}

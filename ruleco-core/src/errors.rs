@@ -220,6 +220,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Test whether the error codes match the protocol specification
     #[test]
     fn test_leco_error_codes() {
         assert_eq!(LecoError::not_signed_in(None).code(), -32090);
