@@ -242,9 +242,9 @@ mod tests {
                 Identity::Component { identity } => {
                     assert_eq!(identity.as_slice(), b"component1_identity");
                 }
-                _ => panic!("Expected Identity::Component, got {:?}", target_identity),
+                _ => panic!("Expected Identity::Component, got {target_identity:?}"),
             },
-            Err(e) => panic!("Expected Ok(Identity), got Err: {:?}", e),
+            Err(e) => panic!("Expected Ok(Identity), got Err: {e:?}"),
         }
     }
 }

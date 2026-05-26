@@ -54,7 +54,7 @@ fn start_coordinator(namespace: &str, port: u16) -> ChildGuard {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|e| panic!("Failed to spawn coordinator binary at {:?}: {}", bin, e));
+        .unwrap_or_else(|e| panic!("Failed to spawn coordinator binary at {bin:?}: {e}"));
     ChildGuard::new(child)
 }
 
@@ -94,24 +94,21 @@ fn coordinator_binary_help_flag() {
     let output = Command::new(&bin)
         .arg("--help")
         .output()
-        .unwrap_or_else(|e| panic!("Failed to run --help: {}", e));
+        .unwrap_or_else(|e| panic!("Failed to run --help: {e}"));
 
     assert!(output.status.success(), "--help should exit with 0");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("--namespace"),
-        "Help should mention --namespace, got: {}",
-        stdout
+        "Help should mention --namespace, got: {stdout}"
     );
     assert!(
         stdout.contains("--port"),
-        "Help should mention --port, got: {}",
-        stdout
+        "Help should mention --port, got: {stdout}"
     );
     assert!(
         stdout.contains("--timeout-interval"),
-        "Help should mention --timeout-interval, got: {}",
-        stdout
+        "Help should mention --timeout-interval, got: {stdout}"
     );
 }
 
@@ -142,7 +139,7 @@ fn two_coordinator_binaries_communicate() {
     let params = AddNodesParams {
         nodes: HashMap::from([(
             namespaces::N2.to_string(),
-            format!("tcp://127.0.0.1:{}", port_n2),
+            format!("tcp://127.0.0.1:{port_n2}"),
         )]),
     };
 
@@ -192,7 +189,7 @@ fn two_coordinator_binaries_communicate() {
 
     let has_ca = n1_components
         .iter()
-        .any(|v| v.as_str().map_or(false, |s| s.contains(components::CA)));
+        .any(|v| v.as_str().is_some_and(|s| s.contains(components::CA)));
     assert!(has_ca, "N2 should know about N1.CA after directory sync");
 
     client_n1

@@ -50,7 +50,7 @@ impl CoordinatorConfig {
                 let content = match fs::read_to_string(&path) {
                     Ok(c) => c,
                     Err(e) => {
-                        warn!("Failed to read config file {:?}: {}", path, e);
+                        warn!("Failed to read config file {path:?}: {e}");
                         continue;
                     }
                 };
@@ -58,7 +58,7 @@ impl CoordinatorConfig {
                 match toml::from_str::<RawConfig>(&content) {
                     Ok(raw) => return Self::from_raw(raw),
                     Err(e) => {
-                        warn!("Failed to parse config file {:?}: {}", path, e);
+                        warn!("Failed to parse config file {path:?}: {e}");
                         continue;
                     }
                 }
@@ -88,10 +88,8 @@ impl CoordinatorConfig {
         let mut port = coordinator_settings.port.unwrap_or(default.port);
 
         let bind_address = coordinator_settings
-            .bind_address
-            .as_ref()
-            .map(|s| s.clone())
-            .unwrap_or_else(|| format!("tcp://*:{}", port));
+            .bind_address.clone()
+            .unwrap_or_else(|| format!("tcp://*:{port}"));
 
         if coordinator_settings.bind_address.is_some() {
             if let Some(addr_port) = bind_address.strip_prefix("tcp://") {
@@ -142,7 +140,7 @@ impl CoordinatorConfig {
         }
         if let Some(p) = port {
             self.port = p;
-            self.bind_address = format!("tcp://*:{}", p);
+            self.bind_address = format!("tcp://*:{p}");
             if public_address.is_none() {
                 self.public_address = Self::get_public_address(&p.to_string());
             }
@@ -173,16 +171,16 @@ impl CoordinatorConfig {
                     if let Some(addr) = addrs.first() {
                         let host = match addr {
                             std::net::IpAddr::V4(addr) => addr.to_string(),
-                            std::net::IpAddr::V6(addr) => format!("[{}]", addr),
+                            std::net::IpAddr::V6(addr) => format!("[{addr}]"),
                         };
-                        return format!("tcp://{}:{}", host, port);
+                        return format!("tcp://{host}:{port}");
                     }
                 }
             }
         }
 
         warn!("Could not determine public IP address from hostname. Using 127.0.0.1 which will only work for local connections. Please configure 'public_address' in ruleco.toml for mutual coordinator sign-in across machines.");
-        format!("tcp://127.0.0.1:{}", port)
+        format!("tcp://127.0.0.1:{port}")
     }
 }
 

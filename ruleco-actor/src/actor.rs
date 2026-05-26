@@ -9,6 +9,7 @@ use ruleco_core::message::{MessageBuilder, MessageView};
 use ruleco_core::protocol_constants::MessageType;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -33,6 +34,17 @@ pub struct Actor {
     parameters: HashMap<String, Value>,
     message_id_counter: u32,
     message_id_counter_arc: Arc<AtomicU32>,
+}
+
+struct EventLoopParams {
+    dealer: zmq::Socket,
+    handlers: HashMap<String, handlers::MethodHandler>,
+    action_handlers: HashMap<String, handlers::ActionHandler>,
+    parameters: HashMap<String, Value>,
+    full_name: Arc<Mutex<Option<FullName>>>,
+    stop_flag: Arc<AtomicBool>,
+    command_rx: Receiver<ActorCommand>,
+    message_id_counter: Arc<AtomicU32>,
 }
 
 pub struct ActorHandle {
@@ -246,16 +258,16 @@ impl Actor {
         let message_id_counter = self.message_id_counter_arc.clone();
 
         let thread_handle = thread::spawn(move || {
-            Self::event_loop(
-                self.dealer,
-                self.handlers,
-                self.action_handlers,
-                self.parameters,
-                full_name_clone,
-                stop_flag_clone,
+            Self::event_loop(EventLoopParams {
+                dealer: self.dealer,
+                handlers: self.handlers,
+                action_handlers: self.action_handlers,
+                parameters: self.parameters,
+                full_name: full_name_clone,
+                stop_flag: stop_flag_clone,
                 command_rx,
                 message_id_counter,
-            );
+            });
         });
 
         Ok(ActorHandle {
@@ -266,16 +278,17 @@ impl Actor {
         })
     }
 
-    fn event_loop(
-        dealer: zmq::Socket,
-        handlers: HashMap<String, handlers::MethodHandler>,
-        action_handlers: HashMap<String, handlers::ActionHandler>,
-        mut parameters: HashMap<String, Value>,
-        full_name: Arc<Mutex<Option<FullName>>>,
-        stop_flag: Arc<AtomicBool>,
-        command_rx: Receiver<ActorCommand>,
-        message_id_counter: Arc<AtomicU32>,
-    ) {
+    fn event_loop(params: EventLoopParams) {
+        let EventLoopParams {
+            dealer,
+            handlers,
+            action_handlers,
+            mut parameters,
+            full_name,
+            stop_flag,
+            command_rx,
+            message_id_counter,
+        } = params;
         let mut running = true;
 
         while running && !stop_flag.load(Ordering::SeqCst) {

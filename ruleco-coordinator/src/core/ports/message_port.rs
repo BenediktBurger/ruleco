@@ -1,11 +1,11 @@
-/// Message transport port - abstract frame handling
-///
-/// This port abstracts the transport mechanism (could be ZeroMQ, TCP, local IPC, etc),
-/// dealing with raw frame exchange without any protocol knowledge.
-/// Protocol parsing and domain concepts (FullName, MessageView) are handled by the Core.
-///
-/// The actual transport implementation (sockets, connections, identity management)
-/// is completely hidden - the domain layer only sees frame exchange.
+//! Message transport port - abstract frame handling
+//!
+//! This port abstracts the transport mechanism (could be ZeroMQ, TCP, local IPC, etc),
+//! dealing with raw frame exchange without any protocol knowledge.
+//! Protocol parsing and domain concepts (FullName, MessageView) are handled by the Core.
+//!
+//! The actual transport implementation (sockets, connections, identity management)
+//! is completely hidden - the domain layer only sees frame exchange.
 
 use anyhow::Result;
 

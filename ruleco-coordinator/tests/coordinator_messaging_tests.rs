@@ -6,6 +6,7 @@
 //! - Coordinator methods (docs/schemas/coordinator.json)
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::thread;
 use std::time::Duration;
 
@@ -352,8 +353,7 @@ fn coordinator_sign_out_not_signed_in() {
         // Should not have a result field - either error or no response expected
         assert!(
             response.get("result").is_none(),
-            "Should not get success response, got: {:?}",
-            response
+            "Should not get success response, got: {response:?}"
         );
     }
 
@@ -456,7 +456,7 @@ fn add_nodes_all_known() {
         nodes: HashMap::from([(namespaces::N2.to_string(), coordinator_n2.address())]),
     };
 
-    let _ = client
+    client
         .send_jsonrpc_request(
             "add_nodes",
             Some(serde_json::value::to_value(params2).unwrap()),
@@ -517,7 +517,7 @@ fn coordinator_shutdown() {
         .expect("Failed to sign in");
 
     // Send shut_down request
-    let _ = client
+    client
         .send_jsonrpc_request("shut_down", None, Some(999), None)
         .expect("Failed to send shut_down");
 

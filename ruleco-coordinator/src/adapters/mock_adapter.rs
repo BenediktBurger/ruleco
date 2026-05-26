@@ -6,14 +6,19 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+type MessageFrames = Vec<Vec<u8>>;
+type SentMessage = (Identity, MessageFrames);
+type SentMessages = Rc<RefCell<Vec<SentMessage>>>;
+type ReceiveQueue = Rc<RefCell<VecDeque<SentMessage>>>;
+
 /// Mock implementation of message port and connection management for testing
 pub struct MockAdapter {
     /// All sent messages (Identity -> frames)
-    pub sent_messages: Rc<RefCell<Vec<(Identity, Vec<Vec<u8>>)>>>,
+    pub sent_messages: SentMessages,
     /// Messages to be received from device socket (pre-populated for tests)
-    pub receive_queue_device: Rc<RefCell<VecDeque<(Identity, Vec<Vec<u8>>)>>>,
+    pub receive_queue_device: ReceiveQueue,
     /// Messages to be received from dealer socket (pre-populated for tests)
-    pub receive_queue_dealer: Rc<RefCell<VecDeque<(Identity, Vec<Vec<u8>>)>>>,
+    pub receive_queue_dealer: ReceiveQueue,
     /// Connected DEALER identities
     pub connected_dealers: Rc<RefCell<Vec<Identity>>>,
     /// Next dealer identity to return

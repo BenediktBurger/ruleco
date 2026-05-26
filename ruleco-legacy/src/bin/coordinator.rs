@@ -20,7 +20,6 @@ use ruleco_legacy::{
     json::{self, to_vec},
 };
 use serde::Serialize;
-use zmq;
 
 fn main() {
     let mut coordinator = Coordinator::new("R1".to_string(), None);
@@ -45,9 +44,9 @@ struct Component {
     timestamp: Instant,
 }
 impl Component {
-    fn build(identity: &Vec<u8>) -> Self {
+    fn build(identity: &[u8]) -> Self {
         Self {
-            identity: identity.clone(),
+            identity: identity.to_owned(),
             timestamp: Instant::now(),
         }
     }
@@ -92,21 +91,18 @@ impl Coordinator {
     fn routing(&mut self) {
         self.running = true;
         while self.running {
-            let _ = self.loop_element();
+            self.loop_element();
         }
         // TODO move somehow in loop
         self.check_timeouts();
     }
 
-    fn loop_element(&mut self) -> () {
+    fn loop_element(&mut self) {
         let msg_cont = match self.read_message() {
             Ok(msg_cont) => msg_cont,
-            Err(_err) => return (),
+            Err(_err) => return ,
         };
-        match self.route_message(msg_cont) {
-            Some(s_m_c) => self.send_routed_message(s_m_c),
-            _ => (),
-        }
+        if let Some(s_m_c) = self.route_message(msg_cont) { self.send_routed_message(s_m_c) }
     }
 
     fn read_message(&self) -> Result<MessageContainer<Vec<u8>>, io::Error> {
@@ -128,7 +124,7 @@ impl Coordinator {
         let sender_name = message.sender();
         let mut receiver_name = message.receiver();
         println!("message read from {:?}", sender_name.name());
-        let valid = self.check_message(&identity, &message, &sender_name, receiver_name);
+        let valid = self.check_message(&identity, &message, sender_name, receiver_name);
         match valid {
             Err(error) => {
                 let message = self.create_error(
@@ -136,21 +132,21 @@ impl Coordinator {
                     error,
                     Some(message.header().conversation_id.clone()),
                 );
-                return Some(SendingContainer {
+                Some(SendingContainer {
                     receiving_namespace: Vec::new(),
                     msg_cont: MessageContainer { identity, message },
-                });
+                })
             }
             Ok(()) => {
                 if receiver_name.name() == b"COORDINATOR"
                     && (receiver_name.namespace() == self.namespace
-                        || receiver_name.namespace().len() == 0)
+                        || receiver_name.namespace().is_empty())
                 {
-                    message = self.handle_message_content(&message, &sender_name);
+                    message = self.handle_message_content(&message, sender_name);
                     // find somehow the routing stuff
                     receiver_name = message.receiver();
                 }
-                match self.find_routing_information(&receiver_name) {
+                match self.find_routing_information(receiver_name) {
                     Err(error) => {
                         let message = self.create_error(
                             message.receiver().clone(),
@@ -182,7 +178,7 @@ impl Coordinator {
         &self,
         receiver_name: &FullName,
     ) -> Result<(Vec<u8>, Vec<u8>), Error> {
-        if receiver_name.namespace() == self.namespace || receiver_name.namespace().len() == 0 {
+        if receiver_name.namespace() == self.namespace || receiver_name.namespace().is_empty() {
             match self.components.get(receiver_name.name()) {
                 Some(comp) => Ok((Vec::new(), comp.identity.clone())),
                 None => Err(Error::ReceiverUnknown),
@@ -195,7 +191,7 @@ impl Coordinator {
 
     /// Send a message once valid receiver information has been found
     fn send_routed_message<T: zmq::Sendable>(&self, s_cont: SendingContainer<T>) {
-        if s_cont.receiving_namespace.len() == 0 {
+        if s_cont.receiving_namespace.is_empty() {
             self.send_local_message(s_cont.msg_cont)
         } // else send to other namespaces
     }
@@ -203,7 +199,7 @@ impl Coordinator {
     /// Check whether the message is from a signed_in Component or signing in.
     fn check_message(
         &mut self,
-        identity: &Vec<u8>,
+        identity: &[u8],
         message: &Message,
         sender_name: &FullName,
         receiver_name: &FullName,
@@ -231,7 +227,7 @@ impl Coordinator {
         }
     }
 
-    fn send_local_ping(&self, identity: &Vec<u8>, name: &Vec<u8>) {
+    fn send_local_ping(&self, identity: &[u8], name: &[u8]) {
         let rq = Request::build(0, "pong");
         let message = MessageBuilder::new()
             .receiver(FullName::from_slice(name).unwrap())
@@ -263,15 +259,15 @@ impl Coordinator {
         println!("Send error with number {}", error.code());
         let error_r = ErrorResponse::build(0, error.code(), error.message());
         let error_msg: Vec<u8> = serde_json::to_vec(&error_r).unwrap();
-        let message = MessageBuilder::new()
+
+        MessageBuilder::new()
             .conversation_id(conversation_id.unwrap_or_default())
             .receiver(receiver)
             .sender(self.full_name.clone())
             .message_type(MessageType::Json.into())
             .payload_single(error_msg)
             .build()
-            .unwrap();
-        message
+            .unwrap()
     }
 
     fn create_response(
@@ -283,15 +279,15 @@ impl Coordinator {
     ) -> Message {
         let response = Response::build(id, result);
         let response_msg: Vec<u8> = serde_json::to_vec(&response).unwrap();
-        let message = MessageBuilder::new()
+
+        MessageBuilder::new()
             .conversation_id(conversation_id.unwrap_or_default())
             .receiver(receiver)
             .sender(self.full_name.clone())
             .message_type(MessageType::Json.into())
             .payload_single(response_msg)
             .build()
-            .unwrap();
-        message
+            .unwrap()
     }
 
     fn send_local_message<T: zmq::Sendable>(&self, msg_cont: MessageContainer<T>) {
@@ -328,14 +324,14 @@ impl Coordinator {
         }
     }
 
-    fn sign_in<E>(&mut self, identity: &Vec<u8>, sender_name: &FullName) -> Result<(), E> {
+    fn sign_in<E>(&mut self, identity: &[u8], sender_name: &FullName) -> Result<(), E> {
         self.components
             .insert(sender_name.name().to_vec(), Component::build(identity));
         Ok(())
     }
 
     fn sign_out<E>(&mut self, sender_name: &FullName) -> Result<Option<u8>, E> {
-        self.components.remove(&sender_name.name().to_vec());
+        self.components.remove(sender_name.name());
         Ok(None)
     }
 
@@ -350,6 +346,7 @@ impl Coordinator {
 mod test {
     use ruleco_legacy::control_protocol::communicator::Communicator;
     use serde_json::Value;
+    use std::str::FromStr;
 
     use super::*;
 
@@ -459,7 +456,7 @@ mod test {
         let scm = c
             .route_message(MessageContainer {
                 identity: b"id_A".to_vec(),
-                message: message,
+                message,
             })
             .unwrap();
         assert_eq!(scm.receiving_namespace, b"".to_vec());
@@ -475,8 +472,8 @@ mod test {
         let message = make_message();
         let sender_name = FullName::from_slice(b"com_A").unwrap();
         let receiver_name = FullName::from_slice(b"com_B").unwrap();
-        let result = c.check_message(&identity, &message, &sender_name, &receiver_name);
-        result
+
+        c.check_message(&identity, &message, &sender_name, &receiver_name)
     }
     #[test]
     fn test_check_message_not_signed_in() {

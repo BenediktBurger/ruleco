@@ -7,6 +7,7 @@ use crate::{
 };
 use ruleco_core::message::{ConversationId, MessageBuilder};
 use serde_json::Error;
+use std::str::FromStr;
 use zmq;
 
 use super::Message;

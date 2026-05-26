@@ -56,7 +56,7 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
         component_name: FullName,
     ) -> Result<Option<ComponentEntry>, Error> {
         let stored_identity = self.directory.get_component_identity(&component_name)?;
-        if &stored_identity != identity {
+        if stored_identity != identity {
             return Err(Error::from(ErrorCode::InvalidParams));
         }
         self.directory.deregister_component(component_name)
@@ -70,11 +70,8 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
                 continue;
             }
             let stored_d = self.directory.get_coordinator(ns.as_bytes());
-            match stored_d {
-                None => {
-                    addresses.push(address);
-                }
-                Some(_) => (),
+            if stored_d.is_none() {
+                addresses.push(address);
             }
         }
         if addresses.is_empty() {
@@ -173,11 +170,11 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
                 Some(&serde_json::value::to_raw_value(&add_nodes_params).unwrap()),
                 jsonrpsee_types::Id::Number(1),
             ))
-            .map_err(|e| Error::custom(-1, format!("Failed to create add_nodes message: {}", e)))?
+            .map_err(|e| Error::custom(-1, format!("Failed to create add_nodes message: {e}")))?
             .build()
-            .map_err(|e| Error::custom(-1, format!("Failed to build message: {}", e)))?
+            .map_err(|e| Error::custom(-1, format!("Failed to build message: {e}")))?
             .to_view()
-            .map_err(|e| Error::custom(-1, format!("Failed to create view: {}", e)))?;
+            .map_err(|e| Error::custom(-1, format!("Failed to create view: {e}")))?;
 
         let record_components_message =
             self.create_record_components_message(remote_coordinator_name)?;
@@ -216,13 +213,13 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
             .map_err(|e| {
                 Error::custom(
                     -1,
-                    format!("Failed to create record_components message: {}", e),
+                    format!("Failed to create record_components message: {e}"),
                 )
             })?
             .build()
-            .map_err(|e| Error::custom(-1, format!("Failed to build message: {}", e)))?
+            .map_err(|e| Error::custom(-1, format!("Failed to build message: {e}")))?
             .to_view()
-            .map_err(|e| Error::custom(-1, format!("Failed to create view: {}", e)))?;
+            .map_err(|e| Error::custom(-1, format!("Failed to create view: {e}")))?;
 
         Ok(message)
     }
@@ -323,7 +320,7 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
 
     /// Check if there are any registered remote coordinators
     pub fn has_remote_coordinators(&self) -> bool {
-        self.directory.get_all_coordinators().len() > 0
+        !self.directory.get_all_coordinators().is_empty()
     }
 
     /// Get all registered coordinator namespaces (not including self)
@@ -344,7 +341,7 @@ impl<D: DirectoryPort, C: ClockPort> CoordinatorCore<D, C> {
             let remote_name = FullName::new(coordinator.namespace.clone(), b"COORDINATOR".to_vec());
             match self.create_record_components_message(remote_name) {
                 Ok(msg) => messages.push(msg),
-                Err(e) => log::warn!("Failed to create directory sync message: {}", e),
+                Err(e) => log::warn!("Failed to create directory sync message: {e}"),
             }
         }
 
@@ -443,11 +440,11 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort<D, C> for CoordinatorCore<D, C>
         // Also bypass for sign_in, coordinator_sign_in, and coordinator_sign_out messages (registration is being established/removed)
         if is_from_local_socket
             && is_from_local_namespace
-            && !self.is_sign_in_message(&message)
-            && !self.is_coordinator_sign_in(&message)
-            && !self.is_coordinator_sign_out(&message)
+            && !self.is_sign_in_message(message)
+            && !self.is_coordinator_sign_in(message)
+            && !self.is_coordinator_sign_out(message)
         {
-            if let Ok(stored_identity) = self.directory.get_component_identity(&sender) {
+            if let Ok(stored_identity) = self.directory.get_component_identity(sender) {
                 if stored_identity.as_slice() != sender_identity_bytes {
                     return Err(RoutingError::new(
                         Error::duplicate_name_with_data(serde_json::Value::String(
@@ -472,7 +469,7 @@ impl<D: DirectoryPort, C: ClockPort> RoutingPort<D, C> for CoordinatorCore<D, C>
         }
 
         if receiver.namespace().is_empty() || receiver.namespace() == &self.namespace[..] {
-            if let Ok(identity) = self.directory.get_component_identity(&receiver) {
+            if let Ok(identity) = self.directory.get_component_identity(receiver) {
                 return Ok(Identity::Component { identity });
             }
             return Err(RoutingError::new(

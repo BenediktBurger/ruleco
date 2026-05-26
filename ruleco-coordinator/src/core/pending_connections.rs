@@ -3,6 +3,18 @@
 use ruleco_core::full_name::FullName;
 use std::collections::HashMap;
 
+/// Error type for pending connection operations
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingConnectionNotFoundError;
+
+impl std::fmt::Display for PendingConnectionNotFoundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "pending connection not found")
+    }
+}
+
+impl std::error::Error for PendingConnectionNotFoundError {}
+
 /// Tracks pending connections to remote coordinators
 ///
 /// This stores the mapping between dealer identities and the information
@@ -20,6 +32,12 @@ pub struct PendingConnectionInfo {
     pub remote_name: Option<FullName>,
     /// Timestamp when the connection was initiated
     pub initiated_at: std::time::Instant,
+}
+
+impl Default for PendingConnections {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PendingConnections {
@@ -56,12 +74,12 @@ impl PendingConnections {
         &mut self,
         dealer_identity: &[u8],
         remote_name: FullName,
-    ) -> Result<(), ()> {
+    ) -> Result<(), PendingConnectionNotFoundError> {
         if let Some(info) = self.connections.get_mut(dealer_identity) {
             info.remote_name = Some(remote_name);
             Ok(())
         } else {
-            Err(())
+            Err(PendingConnectionNotFoundError)
         }
     }
 

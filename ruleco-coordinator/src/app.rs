@@ -186,7 +186,7 @@ where
 
         while let Some((sender_identity, frames)) = self.adapter.recv(timeout_ms)? {
             if let Err(e) = self.process_raw_message(sender_identity, frames) {
-                error!("Error processing message: {}", e);
+                error!("Error processing message: {e}");
             }
         }
 
@@ -194,7 +194,7 @@ where
             let coordinator_msgs = self.adapter.recv_coordinator_sign_ins()?;
             for (sender_identity, frames) in coordinator_msgs {
                 if let Err(e) = self.process_raw_message(sender_identity, frames) {
-                    error!("Error processing message: {}", e);
+                    error!("Error processing message: {e}");
                 }
             }
         }
@@ -210,7 +210,7 @@ where
         let message = match MessageView::new(frames) {
             Ok(msg) => msg,
             Err(e) => {
-                warn!("Failed to parse message: {:?}", e);
+                warn!("Failed to parse message: {e:?}");
                 return Ok(());
             }
         };
@@ -228,7 +228,7 @@ where
                 Identity::Component { .. } => {
                     if sender.namespace() == self.name.namespace() || sender.namespace().is_empty()
                     {
-                        let _ = self.core.update_component_last_seen(&sender);
+                        let _ = self.core.update_component_last_seen(sender);
                     }
                 }
                 Identity::Coordinator { .. } => {
@@ -382,7 +382,7 @@ where
                         return Ok(());
                     }
                     Err(e) => {
-                        error!("Error handling coordinator sign-in success: {}", e);
+                        error!("Error handling coordinator sign-in success: {e}");
                         self.pending_connections
                             .complete_connection(&sender_identity_bytes);
                         let _ = self
@@ -474,7 +474,7 @@ where
         let dealer_identity = match self.adapter.connect_to_coordinator(&address) {
             Ok(id) => id,
             Err(err) => {
-                error!("Failed to connect to coordinator at {}: {}", address, err);
+                error!("Failed to connect to coordinator at {address}: {err}");
                 return;
             }
         };
@@ -490,7 +490,7 @@ where
         let receiver_name = match FullName::from_slice(b"COORDINATOR") {
             Ok(name) => name,
             Err(e) => {
-                error!("Failed to create remote coordinator name: {}", e);
+                error!("Failed to create remote coordinator name: {e}");
                 return;
             }
         };
@@ -503,17 +503,17 @@ where
                 Ok(built_msg) => match built_msg.to_view() {
                     Ok(view) => view,
                     Err(e) => {
-                        error!("Failed to create message view: {}", e);
+                        error!("Failed to create message view: {e}");
                         return;
                     }
                 },
                 Err(e) => {
-                    error!("Failed to build message: {}", e);
+                    error!("Failed to build message: {e}");
                     return;
                 }
             },
             Err(e) => {
-                error!("Failed to add payload to message: {}", e);
+                error!("Failed to add payload to message: {e}");
                 return;
             }
         };
@@ -524,7 +524,7 @@ where
             },
             message.into_raw_frames(),
         ) {
-            error!("Failed to send coordinator sign-in request: {}", err);
+            error!("Failed to send coordinator sign-in request: {err}");
             let _ = self.adapter.disconnect_from_coordinator(&dealer_identity);
             self.pending_connections
                 .complete_connection(&dealer_identity);
@@ -536,6 +536,7 @@ where
 mod tests {
     use super::*;
     use crate::adapters::MockAdapter;
+    use std::str::FromStr;
 
     /// Helper function to format message frames for human-readable debug output
     fn format_message_frames(frames: &[Vec<u8>]) -> String {
@@ -544,7 +545,7 @@ mod tests {
             .enumerate()
             .map(|(i, frame)| {
                 let string_repr = String::from_utf8_lossy(frame);
-                format!("Frame {}: {:?} ({})", i, frame, string_repr)
+                format!("Frame {i}: {frame:?} ({string_repr})")
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -756,8 +757,8 @@ mod tests {
         let sent_to_local = app.adapter.get_sent_to_local();
         let all_sent = app.adapter.get_all_sent_messages();
 
-        if !result.is_ok() {
-            panic!("process_message failed: {:?}", result);
+        if result.is_err() {
+            panic!("process_message failed: {result:?}");
         }
         if sent_to_remote.len() != 1 {
             panic!(
@@ -766,7 +767,7 @@ mod tests {
                 sent_to_local.len(),
                 all_sent
                     .iter()
-                    .map(|(id, _)| format!("{:?}", id))
+                    .map(|(id, _)| format!("{id:?}"))
                     .collect::<Vec<_>>()
             );
         }

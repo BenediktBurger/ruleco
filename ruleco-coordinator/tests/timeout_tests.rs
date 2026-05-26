@@ -33,7 +33,7 @@ fn pong_message_response() {
         .expect("Failed to sign in");
 
     // Send pong request
-    let _ = client
+    client
         .send_jsonrpc_request("pong", None, Some(1), None)
         .expect("Failed to send pong");
 
@@ -73,7 +73,7 @@ fn any_message_counts_as_heartbeat() {
     // Send non-pong messages more frequently than the timeout
     // Using send_local_components instead of pong
     for i in 1..4 {
-        let _ = client
+        client
             .send_jsonrpc_request("send_local_components", None, Some(i), None)
             .expect("Failed to send request");
         let _ = client.receive_jsonrpc_response(500);
@@ -81,7 +81,7 @@ fn any_message_counts_as_heartbeat() {
     }
 
     // Component should still be alive (not timed out)
-    let _ = client
+    client
         .send_jsonrpc_request("send_local_components", None, Some(99), None)
         .expect("Failed to send final query");
     let response = client
@@ -133,7 +133,7 @@ fn component_timeout_detection() {
         .sign_in("query", Some(&coordinator.namespace))
         .expect("Failed to sign in query");
 
-    let _ = query
+    query
         .send_jsonrpc_request("send_local_components", None, Some(1), None)
         .expect("Failed to send send_local_components");
 
@@ -149,7 +149,7 @@ fn component_timeout_detection() {
 
     let has_ca = components
         .iter()
-        .any(|v| v.as_str().map_or(false, |s| s.contains(components::CA)));
+        .any(|v| v.as_str().is_some_and(|s| s.contains(components::CA)));
 
     // CA should have been removed if timeout was detected
     assert!(!has_ca, "CA should be removed after timeout");
@@ -220,7 +220,7 @@ fn component_auto_removal_after_timeout() {
     thread::sleep(Duration::from_secs(3));
 
     // Try to send message - should get "not signed in" error if removed
-    let _ = client
+    client
         .send_jsonrpc_request("test", None, Some(1), None)
         .expect("Failed to send message");
 
@@ -288,7 +288,7 @@ fn multiple_components_timeout_handling() {
     // Keep CA alive with frequent heartbeats while waiting for CB to timeout
     // CB has 2s timeout, so we wait 3s but keep CA sending every 500ms
     for i in 2..8 {
-        let _ = client_ca
+        client_ca
             .send_jsonrpc_request("pong", None, Some(i), None)
             .expect("Failed to send pong");
         let _ = client_ca.receive_jsonrpc_response(500);
@@ -301,7 +301,7 @@ fn multiple_components_timeout_handling() {
         .sign_in("query", Some(&coordinator.namespace))
         .expect("Failed to sign in query");
 
-    let _ = query
+    query
         .send_jsonrpc_request("send_local_components", None, Some(100), None)
         .expect("Failed to send send_local_components");
 
@@ -450,7 +450,7 @@ fn timeout_with_custom_interval() {
         .sign_in("query", Some(&coordinator.namespace))
         .expect("Failed to sign in query");
 
-    let _ = query
+    query
         .send_jsonrpc_request("send_local_components", None, Some(1), None)
         .expect("Failed to send send_local_components");
 
@@ -466,7 +466,7 @@ fn timeout_with_custom_interval() {
 
     let has_ca = components
         .iter()
-        .any(|v| v.as_str().map_or(false, |s| s.contains(components::CA)));
+        .any(|v| v.as_str().is_some_and(|s| s.contains(components::CA)));
 
     assert!(!has_ca, "CA should be removed after timeout");
 
@@ -540,7 +540,7 @@ fn heartbeat_with_high_message_activity() {
 
     // Send many rapid messages and collect responses in batches
     for i in 1..21 {
-        let _ = client
+        client
             .send_jsonrpc_request("pong", None, Some(i), None)
             .expect("Failed to send pong");
         thread::sleep(Duration::from_millis(10));
@@ -554,7 +554,7 @@ fn heartbeat_with_high_message_activity() {
     }
 
     // Component should still be considered alive
-    let _ = client
+    client
         .send_jsonrpc_request("send_local_components", None, Some(999), None)
         .expect("Failed to send query");
 
@@ -589,7 +589,7 @@ fn no_false_positive_timeout_with_pauses() {
 
     // Send messages with pauses shorter than timeout
     for i in 1..4 {
-        let _ = client
+        client
             .send_jsonrpc_request("pong", None, Some(i), None)
             .expect("Failed to send pong");
         let _ = client
@@ -601,7 +601,7 @@ fn no_false_positive_timeout_with_pauses() {
     }
 
     // Component should still be active
-    let _ = client
+    client
         .send_jsonrpc_request("send_local_components", None, Some(100), None)
         .expect("Failed to send query");
 

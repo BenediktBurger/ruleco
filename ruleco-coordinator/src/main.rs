@@ -82,7 +82,7 @@ fn run() -> Result<()> {
 
     thread::spawn(move || {
         if let Ok(signal) = signal_rx.recv() {
-            info!("Received signal {}", signal);
+            info!("Received signal {signal}");
             let _ = shutdown_tx.send(());
         }
     });
@@ -95,7 +95,7 @@ fn run() -> Result<()> {
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("Error: {:?}", e);
+        eprintln!("Error: {e:?}");
         std::process::exit(1);
     }
 }

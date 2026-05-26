@@ -18,6 +18,7 @@ use ruleco_core::full_name::FullName;
 use ruleco_core::message::{ConversationId, MessageBuilder, MessageView};
 use ruleco_core::protocol_constants::MessageType;
 use serde_json::Value;
+use std::str::FromStr;
 use std::borrow::Cow;
 use std::time::Duration;
 
@@ -76,7 +77,7 @@ impl<'a> JsonRpcHandler<'a> {
                         return Ok(vec![JsonRpcOutcome::Response(error_message)]);
                     }
                     Err(e) => {
-                        log::error!("Malformed sender name in message, cannot send error response: {:?}", e);
+                        log::error!("Malformed sender name in message, cannot send error response: {e:?}");
                         return Ok(vec![]);
                     }
                 }
@@ -104,7 +105,7 @@ impl<'a> JsonRpcHandler<'a> {
                             Ok(vec![JsonRpcOutcome::Response(error_message)])
                         }
                         Err(e) => {
-                            warn!("Malformed sender name in message, cannot send error response: {:?}", e);
+                            warn!("Malformed sender name in message, cannot send error response: {e:?}");
                             Ok(vec![])
                         }
                     },
@@ -123,8 +124,8 @@ impl<'a> JsonRpcHandler<'a> {
                         Ok(vec![JsonRpcOutcome::Response(error_message)])
                     }
                     Err(e) => {
-                        warn!("Malformed sender name in message, cannot send error response: {:?}", e);
-                        return Ok(vec![]);
+                        warn!("Malformed sender name in message, cannot send error response: {e:?}");
+                        Ok(vec![])
                     }
                 }
             }
@@ -152,8 +153,7 @@ impl<'a> JsonRpcHandler<'a> {
                 }
                 Err(e) => {
                     warn!(
-                        "Malformed sender name in message, cannot send error response: {:?}",
-                        e
+                        "Malformed sender name in message, cannot send error response: {e:?}"
                     );
                     return Ok(vec![]);
                 }
@@ -370,7 +370,7 @@ impl<'a> JsonRpcHandler<'a> {
         id: Id,
     ) -> Result<Vec<JsonRpcOutcome>> {
         if id == Id::Null {
-            return Ok(Vec::<JsonRpcOutcome>::new());
+            Ok(Vec::<JsonRpcOutcome>::new())
         } else {
             let response_message = self.create_null_response(message, id)?;
             Ok(vec![JsonRpcOutcome::Response(response_message)])
@@ -569,7 +569,7 @@ impl<'a> JsonRpcHandler<'a> {
 
         self.core.remove_coordinator(sender_namespace)?;
         if let Err(err) = self.core.remove_remote_components(sender_namespace) {
-            warn!("Failed to remove remote components: {}", err);
+            warn!("Failed to remove remote components: {err}");
         }
 
         self.create_null_response_outcome(message, id)
@@ -630,7 +630,7 @@ impl<'a> JsonRpcHandler<'a> {
                 .map(|(k, v)| (k, serde_json::Value::String(v))),
         );
         let response = self.create_json_response(
-            &sender,
+            sender,
             id,
             serde_json::Value::Object(nodes_map),
             Some(message.header().conversation_id.clone()),
@@ -716,7 +716,7 @@ impl<'a> JsonRpcHandler<'a> {
 
         // Add local components under our namespace
         let local_components: Vec<String> = self.core.get_local_components();
-        let namespace_str = String::from_utf8_lossy(&self.core.namespace()).to_string();
+        let namespace_str = String::from_utf8_lossy(self.core.namespace()).to_string();
         result_map.insert(
             namespace_str.clone(),
             serde_json::Value::Array(
@@ -742,7 +742,7 @@ impl<'a> JsonRpcHandler<'a> {
         }
 
         let response = self.create_json_response(
-            &sender,
+            sender,
             id,
             serde_json::Value::Object(result_map),
             Some(message.header().conversation_id.clone()),

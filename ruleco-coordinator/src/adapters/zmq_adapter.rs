@@ -1,5 +1,3 @@
-use std::i64;
-
 use crate::core::ports::message_port::Identity;
 use crate::core::ports::{ConnectionManagementPort, MessagePort};
 use anyhow::Result;
@@ -49,7 +47,7 @@ impl ZmqAdapter {
         let connect_address = if address.starts_with("tcp://") {
             address.to_string()
         } else {
-            format!("tcp://{}", address)
+            format!("tcp://{address}")
         };
         let dealer_identity = ConversationId::new().as_bytes().to_vec();
         dealer_socket.set_identity(&dealer_identity)?;
