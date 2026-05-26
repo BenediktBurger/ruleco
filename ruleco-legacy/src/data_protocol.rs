@@ -33,7 +33,7 @@ impl DataMessage {
         self.header[16]
     }
 
-    fn to_frames(self) -> Vec<Vec<u8>> {
+    fn into_frames(self) -> Vec<Vec<u8>> {
         let header = self.header.to_vec();
         let mut frames: Vec<Vec<u8>> = vec![self.topic, header];
         for frame in self.payload {
@@ -72,7 +72,7 @@ impl DataPublisher {
     /// Send a data message with some content
     pub fn send_message(&self, content: Vec<u8>) {
         let message = DataMessage::new(&self.name, 1, ContentTypes::Frame(content));
-        self.socket.send_multipart(message.to_frames(), 0).unwrap()
+        self.socket.send_multipart(message.into_frames(), 0).unwrap()
     }
 }
 

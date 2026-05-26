@@ -44,9 +44,9 @@ struct Component {
     timestamp: Instant,
 }
 impl Component {
-    fn build(identity: &Vec<u8>) -> Self {
+    fn build(identity: &[u8]) -> Self {
         Self {
-            identity: identity.clone(),
+            identity: identity.to_owned(),
             timestamp: Instant::now(),
         }
     }
@@ -199,7 +199,7 @@ impl Coordinator {
     /// Check whether the message is from a signed_in Component or signing in.
     fn check_message(
         &mut self,
-        identity: &Vec<u8>,
+        identity: &[u8],
         message: &Message,
         sender_name: &FullName,
         receiver_name: &FullName,
@@ -227,7 +227,7 @@ impl Coordinator {
         }
     }
 
-    fn send_local_ping(&self, identity: &Vec<u8>, name: &Vec<u8>) {
+    fn send_local_ping(&self, identity: &[u8], name: &[u8]) {
         let rq = Request::build(0, "pong");
         let message = MessageBuilder::new()
             .receiver(FullName::from_slice(name).unwrap())
@@ -324,14 +324,14 @@ impl Coordinator {
         }
     }
 
-    fn sign_in<E>(&mut self, identity: &Vec<u8>, sender_name: &FullName) -> Result<(), E> {
+    fn sign_in<E>(&mut self, identity: &[u8], sender_name: &FullName) -> Result<(), E> {
         self.components
             .insert(sender_name.name().to_vec(), Component::build(identity));
         Ok(())
     }
 
     fn sign_out<E>(&mut self, sender_name: &FullName) -> Result<Option<u8>, E> {
-        self.components.remove(&sender_name.name().to_vec());
+        self.components.remove(sender_name.name());
         Ok(None)
     }
 
